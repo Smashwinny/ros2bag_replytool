@@ -1,0 +1,5 @@
+# This repository backs up only the rosbag replay GUI, not local bag data.
+*
+!.gitignore
+!rosbag_progress_player.py
+!ROSBAG_PROGRESS_PLAYER.md

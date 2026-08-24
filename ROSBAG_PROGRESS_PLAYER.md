@@ -1,0 +1,122 @@
+# ROS 2 Bag 进度回放工具
+
+这是一个面向 ROS 2 Humble 的桌面回放工具。它为 `ros2 bag play` 增加可拖动的
+时间进度条，并提供播放、暂停、跳转、倍速、Domain ID 和仅本机通信配置。
+
+工具通过 rosbag2 自带的 `seek`、`pause`、`resume` 和 `set_rate` 服务控制播放，
+不会修改原始 bag 文件。
+
+## 功能
+
+- 显示当前播放时间、总时长和实时进度。
+- 播放中或暂停时向前、向后拖动进度条。
+- 一键前进或后退 10 秒。
+- 支持 0.25、0.5、1、2、5、10 倍速。
+- 播放到末尾后自动回到开头，控制服务不会退出。
+- 自动以 30 Hz 发布 `/clock`。
+- 在界面配置 `ROS_DOMAIN_ID`（0～232）。
+- 在界面启用或关闭 `ROS_LOCALHOST_ONLY=1`。
+- 网络设置同时作用于 rosbag2 播放器和 GUI 控制节点。
+
+## 环境要求
+
+- Ubuntu 22.04
+- ROS 2 Humble，已安装 `rosbag2` 和 `rosbag2_interfaces`
+- Python 3
+- Python 模块：`rclpy`、`PyYAML`、`tkinter`
+
+Ubuntu/ROS 2 Humble 常用安装命令：
+
+```bash
+sudo apt update
+sudo apt install ros-humble-rosbag2 ros-humble-rosbag2-interfaces \
+  python3-yaml python3-tk
+```
+
+运行前加载 ROS 环境：
+
+```bash
+source /opt/ros/humble/setup.bash
+```
+
+如果 bag 包含自定义消息，还需要加载对应工作空间，例如：
+
+```bash
+source /path/to/your_ws/install/setup.bash
+```
+
+## 启动
+
+在图形界面中选择 bag：
+
+```bash
+python3 rosbag_progress_player.py
+```
+
+启动时直接指定 bag 目录或 `metadata.yaml`：
+
+```bash
+python3 rosbag_progress_player.py /path/to/your_bag
+```
+
+选择的目录必须包含 rosbag2 生成的 `metadata.yaml`。
+
+## 使用方法
+
+1. 设置 `ROS_DOMAIN_ID`，范围为 0～232。
+2. 只允许本机 ROS 节点通信时，勾选“仅本机通信”。
+3. 点击“选择 Bag”，选择包含 `metadata.yaml` 的目录。
+4. 等待状态栏显示“已暂停，可拖动进度条”。
+5. 点击“播放”，或者先拖动进度条到需要检查的时间点。
+6. 播放期间修改网络设置后，点击“应用并重启播放”。新配置会生效，bag 会从开头重新启动。
+
+界面状态栏会显示当前真正生效的 Domain 和通信模式，例如：
+
+```text
+正在播放（Domain 77 · 本机）
+```
+
+## 与其他 ROS 节点配合
+
+播放器会发布 `/clock`。需要使用 bag 时间的 RViz、定位、建图或滤波节点必须启用
+模拟时间：
+
+```bash
+ros2 run your_package your_node --ros-args -p use_sim_time:=true
+rviz2 --ros-args -p use_sim_time:=true
+```
+
+这些节点的 `ROS_DOMAIN_ID` 和 `ROS_LOCALHOST_ONLY` 必须与界面状态栏显示的配置一致。
+
+## 注意事项
+
+- 向过去拖动时间后，ROS 时间会发生倒退。
+- ESKF、建图、定位等有内部历史状态的节点不一定会因 `seek` 自动复位。
+- 单纯查看 RViz 或无状态话题通常可以直接拖动。
+- 做严格、可重复的算法实验时，跳转后应重启相关有状态节点。
+- 若 bag 缺少自定义消息包，rosbag2 会忽略无法解析的相关话题。
+
+## 常见问题
+
+### 点击播放后进度条不动
+
+本工具使用与 rosbag2 `/clock` 发布端兼容的 `BEST_EFFORT` QoS。若仍不更新，请确认：
+
+```bash
+ros2 topic info /clock --verbose
+ros2 topic echo /clock --once
+```
+
+同时检查是否存在其他播放器占用了同名 `/rosbag2_player` 服务。
+
+### 一直显示“正在等待播放器服务”
+
+确认其他终端和界面使用相同的 Domain/local 配置，并检查：
+
+```bash
+ros2 service list | grep rosbag2_player
+```
+
+### 关闭窗口
+
+正常关闭窗口时，工具会向它启动的 rosbag2 进程发送停止信号，不会修改或删除 bag。

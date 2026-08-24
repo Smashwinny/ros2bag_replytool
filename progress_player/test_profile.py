@@ -24,10 +24,12 @@ class ProfileTest(unittest.TestCase):
 
     def test_valid_profile_is_normalized(self):
         profile = MODULE.read_profile(self.write(
-            "managed_command: [bash, run.sh]\nrebuild_rate: 20\nenv: {FLAG: 1}\n"))
+            "managed_command: [bash, run.sh]\nrebuild_rate: 20\n"
+            "checkpoint_restore: true\nenv: {FLAG: 1}\n"))
         self.assertEqual(profile["managed_command"], ["bash", "run.sh"])
         self.assertEqual(profile["rebuild_rate"], 20.0)
         self.assertEqual(profile["env"], {"FLAG": "1"})
+        self.assertTrue(profile["checkpoint_restore"])
 
     def test_shell_string_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "字符串数组"):

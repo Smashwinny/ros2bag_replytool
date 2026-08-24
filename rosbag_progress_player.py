@@ -15,6 +15,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import yaml
+import json
 
 import rclpy
 from rclpy.node import Node
@@ -22,6 +23,7 @@ from rclpy.context import Context
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rosgraph_msgs.msg import Clock
+from std_msgs.msg import Float64, String
 from rosbag2_interfaces.srv import Pause, Resume, Seek, SetRate
 
 
@@ -66,6 +68,7 @@ def read_profile(path: Path | None) -> dict:
         raise ValueError("rebuild_rate 必须在 1～100 之间")
     profile["rebuild_rate"] = rate
     profile["startup_wait_s"] = max(0.0, float(profile.get("startup_wait_s", 2.0)))
+    profile["checkpoint_restore"] = bool(profile.get("checkpoint_restore", False))
     extra_env = profile.get("env", {})
     if not isinstance(extra_env, dict) or not all(
             isinstance(key, str) and isinstance(value, (str, int, float, bool))
@@ -76,7 +79,7 @@ def read_profile(path: Path | None) -> dict:
 
 
 class PlayerControl(Node):
-    def __init__(self, on_clock, context: Context):
+    def __init__(self, on_clock, on_restore_result, context: Context):
         super().__init__("rosbag_progress_control", context=context)
         # rosbag2 Player publishes /clock as BEST_EFFORT on Humble.  The
         # default integer-depth subscription is RELIABLE and therefore cannot
@@ -88,6 +91,13 @@ class PlayerControl(Node):
             durability=DurabilityPolicy.VOLATILE,
         )
         self.create_subscription(Clock, "/clock", on_clock, clock_qos)
+        self.create_subscription(
+            String, "/eskf/replay_restore_result", on_restore_result,
+            QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
+                       reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.restore_publisher = self.create_publisher(
+            Float64, "/eskf/replay_restore_request", 1)
         self.pause_client = self.create_client(Pause, f"{PLAYER_NODE}/pause")
         self.resume_client = self.create_client(Resume, f"{PLAYER_NODE}/resume")
         self.seek_client = self.create_client(Seek, f"{PLAYER_NODE}/seek")
@@ -113,6 +123,11 @@ class PlayerControl(Node):
         request.rate = rate
         return self.rate_client.call_async(request)
 
+    def restore_checkpoint(self, stamp_s: float):
+        message = Float64()
+        message.data = stamp_s
+        self.restore_publisher.publish(message)
+
 
 class ProgressPlayer:
     def __init__(self, root: tk.Tk, initial_bag: str | None, profile_path: str | None):
@@ -132,6 +147,7 @@ class ProgressPlayer:
         self.profile = read_profile(Path(profile_path).resolve() if profile_path else None)
         self.rebuild_target_ns: int | None = None
         self.rebuild_started_wall = 0.0
+        self.checkpoint_restore_pending_ns: int | None = None
         self.context: Context | None = None
         self.executor: SingleThreadedExecutor | None = None
         self.node: PlayerControl | None = None
@@ -253,7 +269,7 @@ class ProgressPlayer:
     def start_ros(self, domain_id: int):
         self.context = Context()
         rclpy.init(args=None, context=self.context, domain_id=domain_id)
-        self.node = PlayerControl(self.on_clock, self.context)
+        self.node = PlayerControl(self.on_clock, self.on_restore_result, self.context)
         self.executor = SingleThreadedExecutor(context=self.context)
         self.executor.add_node(self.node)
         self.ros_stop_event = threading.Event()
@@ -267,6 +283,11 @@ class ProgressPlayer:
 
     def on_clock(self, message: Clock):
         self.current_ns = message.clock.sec * 1_000_000_000 + message.clock.nanosec
+        if (self.profile.get("checkpoint_restore") and self.bag_dir and
+                not self.paused and self.rebuild_target_ns is None and
+                self.current_ns >= self.start_ns + self.duration_ns - 100_000_000):
+            self.node.pause()
+            self.paused = True
 
     def refresh_ui(self):
         if self.process and self.process.poll() is not None:
@@ -343,6 +364,14 @@ class ProgressPlayer:
             future = self.node.seek(target_ns)
             future.add_done_callback(lambda result: self.root.after(0, self.seek_done, result))
             return
+        if self.profile.get("checkpoint_restore"):
+            self.node.pause()
+            self.paused = True
+            self.checkpoint_restore_pending_ns = target_ns
+            self.status_var.set("正在等待 ESKF 原子恢复 checkpoint…")
+            self.root.after(300, lambda: self.node and self.node.restore_checkpoint(
+                target_ns / 1e9))
+            return
         self.node.pause()
         self.paused = True
         self.stop_managed_process()
@@ -366,6 +395,39 @@ class ProgressPlayer:
         except Exception as exc:
             self.rebuild_target_ns = None
             self.status_var.set(f"状态重建失败：{exc}")
+
+    def on_restore_result(self, message: String):
+        self.root.after(0, self.handle_restore_result, message.data)
+
+    def handle_restore_result(self, payload: str):
+        if self.checkpoint_restore_pending_ns is None or self.node is None:
+            return
+        target_ns = self.checkpoint_restore_pending_ns
+        self.checkpoint_restore_pending_ns = None
+        try:
+            result = json.loads(payload)
+            if not result.get("success"):
+                raise RuntimeError(result.get("reason", "checkpoint restore rejected"))
+            checkpoint_ns = int(round(float(result["checkpoint_stamp_s"]) * 1e9))
+            self.current_ns = checkpoint_ns
+            self.rebuild_target_ns = target_ns
+            future = self.node.seek(checkpoint_ns + 1)
+            future.add_done_callback(
+                lambda completed: self.root.after(
+                    0, self.begin_checkpoint_forward_replay, completed))
+        except Exception as exc:
+            self.status_var.set(f"Checkpoint 恢复失败：{exc}")
+
+    def begin_checkpoint_forward_replay(self, future):
+        try:
+            if not future.result().success:
+                raise RuntimeError("rosbag reader 无法定位到 checkpoint cursor")
+            self.node.set_rate(1.0)
+            self.node.resume()
+            self.paused = False
+        except Exception as exc:
+            self.rebuild_target_ns = None
+            self.status_var.set(f"Checkpoint 补算失败：{exc}")
 
     def resume_rebuild(self):
         if self.rebuild_target_ns is None or self.node is None:
@@ -423,6 +485,7 @@ class ProgressPlayer:
 
     def stop_player(self):
         self.rebuild_target_ns = None
+        self.checkpoint_restore_pending_ns = None
         self.stop_managed_process()
         if self.process and self.process.poll() is None:
             try:

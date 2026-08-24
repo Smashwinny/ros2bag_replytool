@@ -99,6 +99,15 @@ rviz2 --ros-args -p use_sim_time:=true
 
 - 向过去拖动时间后，ROS 时间会发生倒退。
 - ESKF、建图、定位等有内部历史状态的节点不会因原生 `seek` 自动复位。
+- `checkpoint_restore: true` 的专项 profile 会先暂停，向
+  `/eskf/replay_restore_request` 发送目标绝对时间，等待 ESKF 在同一进程恢复不晚于目标的
+  完整检查点，再把 bag reader 移到检查点之后并以 1x 补放到目标。该路径不重启节点。
+- ESKF 专项回放将逐事件计算过程量写入
+  `progress_player/runs/<run-id>/eskf_process.jsonl`；回放退出后文件保留，包含状态、完整协方差、
+  predict 的 F/G/Qc/Phi/Qd，以及 update 的 residual/H/R/S/K/delta/Joseph/reset 矩阵。
+- 检查点是进程内对象，关闭 ESKF 进程后不能再次恢复；JSONL 是回放后调试证据，不是磁盘检查点。
+- rosbag2 的时间 seek 不能区分具有相同时间戳的多条 DDS 记录，因此当前专项恢复保证 ESKF
+  内部检查点原子还原，但尚不宣称任意同时间戳 bag 游标都能逐消息 bit-exact 复现。
 - 单纯查看 RViz 或无状态话题通常可以直接拖动。
 - 使用 profile 时，工具会重启受管节点并从 bag 起点高速回放到目标；这只能重建 bag
   已记录输入所决定的状态，不能恢复未记录参数、服务调用、文件或设备状态。

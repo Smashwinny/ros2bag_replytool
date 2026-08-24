@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -47,6 +48,31 @@ def read_metadata(path: Path) -> tuple[Path, int, int]:
     if duration_ns <= 0:
         raise ValueError("bag 时长无效")
     return bag_dir.resolve(), start_ns, duration_ns
+
+
+def read_profile(path: Path | None) -> dict:
+    if path is None:
+        return {}
+    with path.open("r", encoding="utf-8") as stream:
+        profile = yaml.safe_load(stream) or {}
+    if not isinstance(profile, dict):
+        raise ValueError("profile 顶层必须是 YAML mapping")
+    command = profile.get("managed_command")
+    if command is not None and (not isinstance(command, list) or not command or
+                                not all(isinstance(item, str) and item for item in command)):
+        raise ValueError("managed_command 必须是非空字符串数组（不通过 shell 执行）")
+    rate = float(profile.get("rebuild_rate", 10.0))
+    if not 1.0 <= rate <= 100.0:
+        raise ValueError("rebuild_rate 必须在 1～100 之间")
+    profile["rebuild_rate"] = rate
+    profile["startup_wait_s"] = max(0.0, float(profile.get("startup_wait_s", 2.0)))
+    extra_env = profile.get("env", {})
+    if not isinstance(extra_env, dict) or not all(
+            isinstance(key, str) and isinstance(value, (str, int, float, bool))
+            for key, value in extra_env.items()):
+        raise ValueError("env 必须是标量键值 mapping")
+    profile["env"] = {key: str(value) for key, value in extra_env.items()}
+    return profile
 
 
 class PlayerControl(Node):
@@ -89,7 +115,7 @@ class PlayerControl(Node):
 
 
 class ProgressPlayer:
-    def __init__(self, root: tk.Tk, initial_bag: str | None):
+    def __init__(self, root: tk.Tk, initial_bag: str | None, profile_path: str | None):
         self.root = root
         self.root.title("ROS 2 Bag 进度播放器")
         self.root.geometry("820x310")
@@ -102,6 +128,10 @@ class ProgressPlayer:
         self.dragging = False
         self.paused = True
         self.process: subprocess.Popen | None = None
+        self.managed_process: subprocess.Popen | None = None
+        self.profile = read_profile(Path(profile_path).resolve() if profile_path else None)
+        self.rebuild_target_ns: int | None = None
+        self.rebuild_started_wall = 0.0
         self.context: Context | None = None
         self.executor: SingleThreadedExecutor | None = None
         self.node: PlayerControl | None = None
@@ -183,7 +213,7 @@ class ProgressPlayer:
         self.paused = True
         self.path_var.set(str(bag_dir))
         self.status_var.set("正在启动播放器…")
-        log_dir = "/tmp/rosbag_progress_player_logs"
+        log_dir = str(Path(__file__).resolve().parent / "tmp" / "rosbag_progress_player_logs")
         os.makedirs(log_dir, exist_ok=True)
         env = os.environ.copy()
         env["ROS_LOG_DIR"] = log_dir
@@ -202,12 +232,13 @@ class ProgressPlayer:
             return
         command = [
             "ros2", "bag", "play", str(bag_dir), "--clock", "30",
-            "--start-paused", "--disable-keyboard-controls", "--loop",
+            "--start-paused", "--disable-keyboard-controls",
         ]
         try:
             self.process = subprocess.Popen(
                 command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True)
+            self.start_managed_process(env, log_dir)
         except OSError as exc:
             self.process = None
             self.stop_ros()
@@ -248,9 +279,16 @@ class ProgressPlayer:
             self.play_button.configure(state="normal" if ready else "disabled")
             mode = "本机" if self.active_localhost else "网络"
             active = f"Domain {self.active_domain_id} · {mode}"
-            self.status_var.set(
-                f"已暂停，可拖动进度条（{active}）" if ready and self.paused
-                else (f"正在播放（{active}）" if ready else f"正在等待播放器服务（{active}）…"))
+            if self.rebuild_target_ns is not None:
+                target_s = (self.rebuild_target_ns - self.start_ns) / 1e9
+                self.status_var.set(f"正在从起点重建状态 → {format_time(target_s)}（{active}）")
+            else:
+                self.status_var.set(
+                    f"已暂停，可拖动进度条（{active}）" if ready and self.paused
+                    else (f"正在播放（{active}）" if ready else f"正在等待播放器服务（{active}）…"))
+
+        if self.rebuild_target_ns is not None and self.current_ns >= self.rebuild_target_ns:
+            self.finish_rebuild()
 
         if self.bag_dir:
             offset_ns = min(max(self.current_ns - self.start_ns, 0), self.duration_ns)
@@ -268,9 +306,7 @@ class ProgressPlayer:
             self.dragging = False
             return
         offset_ns = int(self.slider_var.get() * self.duration_ns / 1000)
-        self.current_ns = self.start_ns + offset_ns
-        future = self.node.seek(self.current_ns)
-        future.add_done_callback(lambda result: self.root.after(0, self.seek_done, result))
+        self.rebuild_to(self.start_ns + offset_ns)
         self.dragging = False
 
     def seek_done(self, future):
@@ -296,14 +332,98 @@ class ProgressPlayer:
         if not self.bag_dir or self.node is None or not self.node.ready():
             return
         target = min(max(self.current_ns + int(seconds * 1e9), self.start_ns), self.start_ns + self.duration_ns - 1)
-        self.current_ns = target
-        self.node.seek(target)
+        self.rebuild_to(target)
+
+    def rebuild_to(self, target_ns: int):
+        """Restart managed state and replay every recorded input up to target."""
+        if self.node is None or not self.node.ready() or self.rebuild_target_ns is not None:
+            return
+        if not self.profile.get("managed_command"):
+            self.current_ns = target_ns
+            future = self.node.seek(target_ns)
+            future.add_done_callback(lambda result: self.root.after(0, self.seek_done, result))
+            return
+        self.node.pause()
+        self.paused = True
+        self.stop_managed_process()
+        self.current_ns = self.start_ns
+        future = self.node.seek(self.start_ns)
+        self.rebuild_target_ns = target_ns
+        future.add_done_callback(lambda result: self.root.after(0, self.begin_rebuild, result))
+
+    def begin_rebuild(self, future):
+        try:
+            if not future.result().success:
+                raise RuntimeError("无法跳回 bag 起点")
+            env = os.environ.copy()
+            env["ROS_DOMAIN_ID"] = str(self.active_domain_id)
+            env["ROS_LOCALHOST_ONLY"] = "1" if self.active_localhost else "0"
+            log_dir = str(Path(__file__).resolve().parent / "tmp" / "rosbag_progress_player_logs")
+            self.start_managed_process(env, log_dir)
+            self.node.set_rate(self.profile["rebuild_rate"])
+            self.rebuild_started_wall = time.monotonic()
+            self.root.after(int(self.profile["startup_wait_s"] * 1000), self.resume_rebuild)
+        except Exception as exc:
+            self.rebuild_target_ns = None
+            self.status_var.set(f"状态重建失败：{exc}")
+
+    def resume_rebuild(self):
+        if self.rebuild_target_ns is None or self.node is None:
+            return
+        if self.rebuild_target_ns <= self.start_ns:
+            self.finish_rebuild()
+            return
+        self.node.resume()
+        self.paused = False
+
+    def finish_rebuild(self):
+        if self.rebuild_target_ns is None or self.node is None:
+            return
+        target = self.rebuild_target_ns
+        actual = self.current_ns
+        self.rebuild_target_ns = None
+        self.node.pause()
+        self.node.set_rate(float(self.rate_var.get()))
+        self.paused = True
+        self.play_button.configure(text="▶ 播放")
+        overshoot_ms = max(0.0, (actual - target) / 1e6)
+        self.status_var.set(
+            f"状态已从起点重建并暂停；目标后越界 {overshoot_ms:.1f} ms（未回拨状态）")
+
+    def start_managed_process(self, env: dict, log_dir: str):
+        command = self.profile.get("managed_command")
+        if not command or self.managed_process is not None:
+            return
+        cwd = self.profile.get("cwd")
+        env = {**env, **self.profile.get("env", {})}
+        log_path = Path(log_dir) / "managed_stack.log"
+        log_stream = log_path.open("ab")
+        try:
+            self.managed_process = subprocess.Popen(
+                command, cwd=cwd, env=env, stdout=log_stream, stderr=subprocess.STDOUT,
+                start_new_session=True)
+        finally:
+            log_stream.close()
+
+    def stop_managed_process(self):
+        process = self.managed_process
+        if process and process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=5)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=2)
+        self.managed_process = None
 
     def change_rate(self, _event=None):
         if self.node is not None and self.node.ready():
             self.node.set_rate(float(self.rate_var.get()))
 
     def stop_player(self):
+        self.rebuild_target_ns = None
+        self.stop_managed_process()
         if self.process and self.process.poll() is None:
             try:
                 os.killpg(self.process.pid, signal.SIGINT)
@@ -339,9 +459,10 @@ class ProgressPlayer:
 def main():
     parser = argparse.ArgumentParser(description="ROS 2 bag player with a seekable progress bar")
     parser.add_argument("bag", nargs="?", help="bag directory or metadata.yaml")
+    parser.add_argument("--profile", help="YAML profile containing a managed stateful command")
     args = parser.parse_args()
     root = tk.Tk()
-    ProgressPlayer(root, args.bag)
+    ProgressPlayer(root, args.bag, args.profile)
     root.mainloop()
 
 

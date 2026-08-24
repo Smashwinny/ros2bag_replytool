@@ -1,0 +1,22 @@
+# Stateful ROS 2 bag replay
+
+`rosbag_progress_player.py` has two seek modes:
+
+- without a profile, seek is the native rosbag2 seek and does not reset nodes;
+- with a profile, every seek restarts the managed command and replays all recorded
+  inputs from the bag start to reconstruct state.
+
+Run the ESKF profile through the project wrapper:
+
+```bash
+bash /home/hulk/mow_mow_agent/mowmow/docs/eskf_fusion/debug/run_eskf_compare.sh --progress-player
+```
+
+The reconstruction rate defaults to 10x. The player pauses on the first `/clock`
+sample at or after the target and reports the measured overshoot. It deliberately
+does not seek backward after pausing, because that would make the node state newer
+than ROS time.
+
+Only values present in the bag can be reconstructed. Parameters, service calls,
+files, device state, or process memory absent from the recording cannot be restored.
+

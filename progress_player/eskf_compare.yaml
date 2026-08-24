@@ -1,0 +1,10 @@
+managed_command:
+  - bash
+  - /home/hulk/mow_mow_agent/mowmow/docs/eskf_fusion/debug/run_eskf_compare.sh
+  - --stack-only
+cwd: /home/hulk/mow_mow_agent/mowmow
+rebuild_rate: 10.0
+startup_wait_s: 2.0
+env:
+  ESKF_COMPARE_NO_RVIZ: 0
+

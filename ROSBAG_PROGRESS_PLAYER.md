@@ -17,6 +17,7 @@
 - 在界面配置 `ROS_DOMAIN_ID`（0～232）。
 - 在界面启用或关闭 `ROS_LOCALHOST_ONLY=1`。
 - 网络设置同时作用于 rosbag2 播放器和 GUI 控制节点。
+- 可通过 `--profile` 托管有状态算法；拖动时重启算法并从 bag 起点重建状态。
 
 ## 环境要求
 
@@ -59,6 +60,12 @@ python3 rosbag_progress_player.py
 python3 rosbag_progress_player.py /path/to/your_bag
 ```
 
+ESKF 对比统一入口：
+
+```bash
+bash /home/hulk/mow_mow_agent/mowmow/docs/eskf_fusion/debug/run_eskf_compare.sh --progress-player
+```
+
 选择的目录必须包含 rosbag2 生成的 `metadata.yaml`。
 
 ## 使用方法
@@ -91,9 +98,12 @@ rviz2 --ros-args -p use_sim_time:=true
 ## 注意事项
 
 - 向过去拖动时间后，ROS 时间会发生倒退。
-- ESKF、建图、定位等有内部历史状态的节点不一定会因 `seek` 自动复位。
+- ESKF、建图、定位等有内部历史状态的节点不会因原生 `seek` 自动复位。
 - 单纯查看 RViz 或无状态话题通常可以直接拖动。
-- 做严格、可重复的算法实验时，跳转后应重启相关有状态节点。
+- 使用 profile 时，工具会重启受管节点并从 bag 起点高速回放到目标；这只能重建 bag
+  已记录输入所决定的状态，不能恢复未记录参数、服务调用、文件或设备状态。
+- 重建在第一个不早于目标的 `/clock` 样本暂停，并显示越界毫秒数；不会再向后 seek，
+  以免算法状态比 ROS 时间更新。
 - 若 bag 缺少自定义消息包，rosbag2 会忽略无法解析的相关话题。
 
 ## 常见问题

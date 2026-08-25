@@ -110,6 +110,7 @@ xs=()
 widths=()
 progress_titles=()
 rviz_titles=()
+rviz_ids=()
 descendants() {
   local parent=$1 child
   while read -r child; do
@@ -184,8 +185,10 @@ for index in "${!players[@]}"; do
     rviz_hex=$(printf '0x%x' "${rviz_id}")
     wmctrl -i -r "${rviz_hex}" -e "0,${x},${screen_y},${width},${rviz_h}" \
       2>/dev/null || true
+    rviz_ids[$index]="${rviz_id}"
   else
     echo "WARN: RViz2 window was not found for ${label}." >&2
+    rviz_ids[$index]=""
   fi
   progress_hex=$({ wmctrl -l 2>/dev/null || true; } | \
     awk -v title="${progress_title}" 'index($0,title) {print $1; exit}')
@@ -195,6 +198,25 @@ for index in "${!players[@]}"; do
   else
     echo "WARN: progress window was not found for ${label}." >&2
   fi
+done
+
+# RViz can restore its saved 1400x900 geometry once after the first window was
+# mapped. Re-apply every known window only after all three RViz instances have
+# completed startup, then repeat once to make the final geometry deterministic.
+for _ in 1 2; do
+  sleep 1
+  for index in "${!rviz_ids[@]}"; do
+    rviz_id=${rviz_ids[$index]}
+    [[ -z "${rviz_id}" ]] && continue
+    rviz_hex=$(printf '0x%x' "${rviz_id}")
+    wmctrl -i -r "${rviz_hex}" -b remove,maximized_vert,maximized_horz \
+      2>/dev/null || true
+    xdotool set_window --name "${rviz_titles[$index]}" "${rviz_id}" \
+      2>/dev/null || true
+    wmctrl -i -r "${rviz_hex}" \
+      -e "0,${xs[$index]},${screen_y},${widths[$index]},${rviz_h}" \
+      2>/dev/null || true
+  done
 done
 
 echo "Started ${#bags[@]} isolated ESKF replay desktops on Domains ${base_domain}..$((base_domain + columns - 1))."

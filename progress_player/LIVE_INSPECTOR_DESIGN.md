@@ -19,3 +19,5 @@ Zenity checklist over the profile's registered bag set; positional paths remain 
 runs. Selection is limited to three bags because the desktop layout has three columns.
 Before creating GUI processes, the launcher checks every planned Domain and fails the whole launch with
 the discovered node names when any Domain is occupied. Partial desktops are not an accepted state.
+RViz may restore its saved geometry after the first map event. The launcher therefore records every
+window id and performs two final layout passes only after all selected RViz instances are mapped.

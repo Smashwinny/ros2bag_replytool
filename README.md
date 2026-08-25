@@ -46,6 +46,9 @@ ESKF_MULTI_BASE_DOMAIN=190 \
   /home/hulk/ros2bag/progress_player/launch_eskf_multi_replay.sh --select
 ```
 
+RViz 首次映射后可能恢复自身保存的默认窗口尺寸。多开脚本会在全部 RViz 启动完成后统一执行两次
+最终布局，确保第一列不会停留在默认 `1400×900` 并遮挡其他列。
+
 每列从上到下对应同一个 bag/Domain 的 RViz、浮动过程量窗口和进度条。在启动终端按
 `Ctrl+C` 会结束该次多包回放创建的播放器、ESKF、adapter、RViz 和浮窗。
 

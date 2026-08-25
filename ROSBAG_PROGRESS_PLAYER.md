@@ -133,6 +133,9 @@ rviz2 --ros-args -p use_sim_time:=true
 ## 注意事项
 
 - 向过去拖动时间后，ROS 时间会发生倒退。
+- 每次拖动、±10 秒或指定时刻跳转前，播放器都会在
+  `/rosbag_progress/visual_seek` 发布目标绝对时间；轨迹可视化节点应先按该时间裁剪
+  历史，并在历史为空时发布 `poses: []`，不能仅清本地缓存后停止发布。
 - ESKF、建图、定位等有内部历史状态的节点不会因原生 `seek` 自动复位。
 - `checkpoint_restore: true` 的专项 profile 会先暂停，向
   `/eskf/replay_restore_request` 发送目标绝对时间，等待 ESKF 在同一进程恢复不晚于目标的

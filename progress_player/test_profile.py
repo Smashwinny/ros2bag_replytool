@@ -67,6 +67,20 @@ class ProfileTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "没有登记"):
             MODULE.resolve_target_yaml(profile, Path("/bags/not_registered"))
 
+    def test_time_offset_accepts_seconds_and_clock_formats(self):
+        self.assertEqual(MODULE.parse_time_offset_ns("12.345"), 12_345_000_000)
+        self.assertEqual(MODULE.parse_time_offset_ns("02:03.004"), 123_004_000_000)
+        self.assertEqual(
+            MODULE.parse_time_offset_ns("01:02:03.000000001"),
+            3_723_000_000_001,
+        )
+
+    def test_time_offset_rejects_invalid_values(self):
+        for value in ("", "-1", "1:60", "00:60:00", "abc", "1:2:3:4", "NaN"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    MODULE.parse_time_offset_ns(value)
+
 
 if __name__ == "__main__":
     unittest.main()

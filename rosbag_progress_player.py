@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal, InvalidOperation
 import os
 from pathlib import Path
 import signal
@@ -12,7 +13,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import yaml
 import json
@@ -35,6 +36,37 @@ def format_time(seconds: float) -> str:
     hours, remainder = divmod(seconds, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def parse_time_offset_ns(value: str) -> int:
+    """Parse seconds, MM:SS(.sss), or HH:MM:SS(.sss) into nanoseconds."""
+    text = value.strip()
+    if not text:
+        raise ValueError("时间不能为空")
+    parts = text.split(":")
+    if len(parts) not in (1, 2, 3):
+        raise ValueError("格式应为秒、MM:SS 或 HH:MM:SS.mmm")
+    try:
+        if len(parts) == 1:
+            total = Decimal(parts[0])
+        else:
+            if not all(part.isdigit() for part in parts[:-1]):
+                raise ValueError
+            seconds = Decimal(parts[-1])
+            if seconds < 0 or seconds >= 60:
+                raise ValueError
+            if len(parts) == 2:
+                total = Decimal(int(parts[0]) * 60) + seconds
+            else:
+                minutes = int(parts[1])
+                if minutes >= 60:
+                    raise ValueError
+                total = Decimal(int(parts[0]) * 3600 + minutes * 60) + seconds
+    except (InvalidOperation, ValueError):
+        raise ValueError("格式应为秒、MM:SS 或 HH:MM:SS.mmm") from None
+    if not total.is_finite() or total < 0:
+        raise ValueError("时间必须是非负有限值")
+    return int(total * Decimal(1_000_000_000))
 
 
 def read_metadata(path: Path) -> tuple[Path, int, int]:
@@ -227,6 +259,20 @@ class ProgressPlayer:
         self.play_button = ttk.Button(controls, text="▶ 播放", command=self.toggle_play, state="disabled")
         self.play_button.pack(side="left", padx=4)
         ttk.Button(controls, text="+10 秒  ⏭", command=lambda: self.jump(10)).pack(side="left", padx=4)
+        self.jump_time_icon = tk.PhotoImage(width=16, height=16)
+        icon_color = "#326da8"
+        for x, y in (
+                (6, 1), (7, 1), (8, 1), (9, 1),
+                (3, 3), (4, 2), (11, 2), (12, 3),
+                (2, 4), (13, 4), (1, 6), (14, 6),
+                (1, 7), (14, 7), (1, 8), (14, 8),
+                (2, 11), (13, 11), (3, 12), (12, 12),
+                (4, 13), (11, 13), (6, 14), (7, 14), (8, 14), (9, 14),
+                (7, 5), (7, 6), (7, 7), (8, 8), (9, 9), (10, 10)):
+            self.jump_time_icon.put(icon_color, (x, y))
+        ttk.Button(
+            controls, text="指定时刻", image=self.jump_time_icon,
+            compound="left", command=self.jump_to_time).pack(side="left", padx=4)
         ttk.Label(controls, text="  倍速").pack(side="left")
         rate_box = ttk.Combobox(
             controls, textvariable=self.rate_var, values=("0.25", "0.5", "1.0", "2.0", "5.0", "10.0"),
@@ -387,6 +433,29 @@ class ProgressPlayer:
             return
         target = min(max(self.current_ns + int(seconds * 1e9), self.start_ns), self.start_ns + self.duration_ns - 1)
         self.rebuild_to(target)
+
+    def jump_to_time(self):
+        if not self.bag_dir or self.node is None or not self.node.ready():
+            messagebox.showinfo("指定时刻", "播放器尚未准备完成", parent=self.root)
+            return
+        current_offset_s = max(0.0, (self.current_ns - self.start_ns) / 1e9)
+        value = simpledialog.askstring(
+            "跳转到指定时刻",
+            "输入相对 bag 起点的时间：\n秒、MM:SS 或 HH:MM:SS.mmm",
+            initialvalue=f"{current_offset_s:.3f}",
+            parent=self.root,
+        )
+        if value is None:
+            return
+        try:
+            offset_ns = parse_time_offset_ns(value)
+            if offset_ns >= self.duration_ns:
+                raise ValueError(
+                    f"目标超出 bag 时长 {format_time(self.duration_ns / 1e9)}")
+        except ValueError as exc:
+            messagebox.showerror("时间无效", str(exc), parent=self.root)
+            return
+        self.rebuild_to(self.start_ns + offset_ns)
 
     def rebuild_to(self, target_ns: int):
         """Restart managed state and replay every recorded input up to target."""

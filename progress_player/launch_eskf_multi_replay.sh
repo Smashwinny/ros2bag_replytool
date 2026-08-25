@@ -66,6 +66,25 @@ fi
 set +u
 source /home/hulk/mow_mow_agent/mowmow/docs/eskf_fusion/debug/eskf_compare_env.sh
 set -u
+
+# Fail before creating any GUI when one of the planned isolated Domains is
+# occupied. Otherwise each player reports its own stack failure and leaves a
+# misleading partial desktop (three progress bars but fewer RViz windows).
+for index in "${!bags[@]}"; do
+  domain=$((base_domain + index))
+  if ! existing_nodes=$(ROS_DOMAIN_ID="${domain}" ROS_LOCALHOST_ONLY=1 \
+      ros2 node list --no-daemon 2>/dev/null); then
+    echo "ERROR: failed to inspect ROS_DOMAIN_ID=${domain}." >&2
+    exit 1
+  fi
+  existing_nodes=$(printf '%s\n' "${existing_nodes}" | sed '/^$/d')
+  if [[ -n "${existing_nodes}" ]]; then
+    echo "ERROR: ROS_DOMAIN_ID=${domain} is occupied; no replay windows were started:" >&2
+    echo "${existing_nodes}" >&2
+    echo "Stop the stale nodes or choose another base Domain with ESKF_MULTI_BASE_DOMAIN." >&2
+    exit 1
+  fi
+done
 screen=$(xrandr --current | awk '
   / connected/ {
     for (i=1; i<=NF; ++i) {

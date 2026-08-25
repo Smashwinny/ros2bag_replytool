@@ -38,6 +38,14 @@ source /opt/ros/humble/setup.bash
 也可以直接传入 1～3 个 bag 路径。脚本会先并行启动全部选中回放栈，再统一寻找和排列窗口，
 不会因为等待第一个 RViz 而推迟第二、第三个 Domain。
 
+启动前脚本会检查计划使用的全部 Domain。任一 Domain 存在旧节点时，会在创建窗口前列出占用
+节点并整体退出，避免出现“进度条有三个、RViz 只有一个”的半启动桌面。可停止旧节点，或者：
+
+```bash
+ESKF_MULTI_BASE_DOMAIN=190 \
+  /home/hulk/ros2bag/progress_player/launch_eskf_multi_replay.sh --select
+```
+
 每列从上到下对应同一个 bag/Domain 的 RViz、浮动过程量窗口和进度条。在启动终端按
 `Ctrl+C` 会结束该次多包回放创建的播放器、ESKF、adapter、RViz 和浮窗。
 

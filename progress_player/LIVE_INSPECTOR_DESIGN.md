@@ -17,3 +17,5 @@ and preservation of simultaneous Domain runs.
 The multi launcher starts every selected player before waiting for any RViz window. `--select` uses a
 Zenity checklist over the profile's registered bag set; positional paths remain available for scripted
 runs. Selection is limited to three bags because the desktop layout has three columns.
+Before creating GUI processes, the launcher checks every planned Domain and fails the whole launch with
+the discovered node names when any Domain is occupied. Partial desktops are not an accepted state.

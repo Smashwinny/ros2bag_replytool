@@ -110,17 +110,18 @@ for index in "${!bags[@]}"; do
     # RViz may replace its title once after loading the config; wait for that
     # initialization before assigning the stable bag/domain title.
     sleep 2
-    xdotool set_window --name "${rviz_title}" "${rviz_id}"
+    xdotool set_window --name "${rviz_title}" "${rviz_id}" 2>/dev/null || true
     rviz_hex=$(printf '0x%x' "${rviz_id}")
-    wmctrl -i -r "${rviz_hex}" -e "0,${x},${screen_y},${width},${rviz_h}"
+    wmctrl -i -r "${rviz_hex}" -e "0,${x},${screen_y},${width},${rviz_h}" \
+      2>/dev/null || true
   else
     echo "WARN: RViz2 window was not found for ${label}." >&2
   fi
-  progress_id=$(xdotool search --onlyvisible --pid "${player_pid}" 2>/dev/null | head -1 || true)
-  if [[ -n "${progress_id}" ]]; then
-    progress_hex=$(printf '0x%x' "${progress_id}")
+  progress_hex=$({ wmctrl -l 2>/dev/null || true; } | \
+    awk -v title="${progress_title}" 'index($0,title) {print $1; exit}')
+  if [[ -n "${progress_hex}" ]]; then
     wmctrl -i -r "${progress_hex}" \
-      -e "0,${x},$((screen_y + rviz_h)),${width},${player_h}"
+      -e "0,${x},$((screen_y + rviz_h)),${width},${player_h}" 2>/dev/null || true
   else
     echo "WARN: progress window was not found for ${label}." >&2
   fi

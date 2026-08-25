@@ -56,6 +56,7 @@ columns=${#bags[@]}
 column_w=$((screen_w / columns))
 player_h=310
 rviz_h=$((screen_h - player_h))
+status_h=76
 
 players=()
 descendants() {
@@ -84,9 +85,12 @@ for index in "${!bags[@]}"; do
   if ((index == columns - 1)); then width=$((screen_w - x)); fi
   progress_title="[${index}:${label}] ESKF Progress · Domain ${domain}"
   rviz_title="[${index}:${label}] RViz2 · Domain ${domain}"
+  status_title="[${index}:${label}] Sensor Trust · Domain ${domain}"
 
   ESKF_COMPARE_BAG="${bag}" ESKF_COMPARE_DOMAIN_ID="${domain}" \
     ESKF_COMPARE_RVIZ_COMPACT=1 \
+    ESKF_COMPARE_STATUS_TITLE="${status_title}" \
+    ESKF_COMPARE_STATUS_GEOMETRY="${width}x${status_h}+${x}+$((screen_y + rviz_h - status_h))" \
     ROS_DOMAIN_ID="${domain}" ROS_LOCALHOST_ONLY=1 \
     python3 "${player}" "${bag}" --profile "${profile}" \
       --title "${progress_title}" --geometry "${width}x${player_h}+${x}+$((screen_y + rviz_h))" &
@@ -129,6 +133,6 @@ for index in "${!bags[@]}"; do
 done
 
 echo "Started ${#bags[@]} isolated ESKF replay desktops on Domains ${base_domain}..$((base_domain + columns - 1))."
-echo "Each column is one bag: RViz2 above, matching progress bar below."
+echo "Each column is one bag: RViz2, floating sensor status and matching progress bar."
 echo "Close the progress windows or press Ctrl-C here to stop every replay stack."
 wait

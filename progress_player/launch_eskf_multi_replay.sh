@@ -56,7 +56,7 @@ columns=${#bags[@]}
 column_w=$((screen_w / columns))
 player_h=310
 rviz_h=$((screen_h - player_h))
-status_h=76
+status_h=118
 
 players=()
 descendants() {
@@ -85,7 +85,7 @@ for index in "${!bags[@]}"; do
   if ((index == columns - 1)); then width=$((screen_w - x)); fi
   progress_title="[${index}:${label}] ESKF Progress · Domain ${domain}"
   rviz_title="[${index}:${label}] RViz2 · Domain ${domain}"
-  status_title="[${index}:${label}] Sensor Trust · Domain ${domain}"
+  status_title="[${index}:${label}] ESKF Process · Domain ${domain}"
 
   ESKF_COMPARE_BAG="${bag}" ESKF_COMPARE_DOMAIN_ID="${domain}" \
     ESKF_COMPARE_RVIZ_COMPACT=1 \

@@ -6,5 +6,16 @@ cwd: /home/hulk/mow_mow_agent/mowmow
 rebuild_rate: 10.0
 startup_wait_s: 2.0
 checkpoint_restore: true
+bag_play_args:
+  - --topics
+  - /imu
+  - /gps_data
+  - /odometry
+  - /cmd_vel
+  - /fusion_location
+  - /motor_speed
+  - --remap
+  - /odometry:=/bag/odometry
+  - /fusion_location:=/legacy/fusion_location
 env:
   ESKF_COMPARE_NO_RVIZ: 0

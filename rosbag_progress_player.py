@@ -69,6 +69,11 @@ def read_profile(path: Path | None) -> dict:
     profile["rebuild_rate"] = rate
     profile["startup_wait_s"] = max(0.0, float(profile.get("startup_wait_s", 2.0)))
     profile["checkpoint_restore"] = bool(profile.get("checkpoint_restore", False))
+    bag_play_args = profile.get("bag_play_args", [])
+    if not isinstance(bag_play_args, list) or not all(
+            isinstance(value, str) for value in bag_play_args):
+        raise ValueError("profile bag_play_args 必须是字符串列表")
+    profile["bag_play_args"] = bag_play_args
     extra_env = profile.get("env", {})
     if not isinstance(extra_env, dict) or not all(
             isinstance(key, str) and isinstance(value, (str, int, float, bool))
@@ -251,6 +256,7 @@ class ProgressPlayer:
             "ros2", "bag", "play", str(bag_dir), "--clock", "30",
             "--start-paused", "--disable-keyboard-controls",
         ]
+        command.extend(self.profile.get("bag_play_args", []))
         try:
             self.process = subprocess.Popen(
                 command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -528,7 +534,13 @@ def main():
     parser.add_argument("--geometry", help="Tk geometry, for example 640x310+0+770")
     args = parser.parse_args()
     root = tk.Tk()
-    ProgressPlayer(root, args.bag, args.profile, args.title, args.geometry)
+    player = ProgressPlayer(root, args.bag, args.profile, args.title, args.geometry)
+
+    def request_close(_signum, _frame):
+        root.after(0, player.close)
+
+    signal.signal(signal.SIGINT, request_close)
+    signal.signal(signal.SIGTERM, request_close)
     root.mainloop()
 
 

@@ -72,6 +72,14 @@ bash /home/hulk/mow_mow_agent/mowmow/docs/eskf_fusion/debug/run_eskf_compare.sh 
 bash /home/hulk/ros2bag/progress_player/launch_eskf_multi_replay.sh
 ```
 
+多开前应先使用已有单包包装入口验证；例如：
+
+```bash
+ESKF_COMPARE_DOMAIN_ID=186 bash \
+  /home/hulk/mow_mow_agent/mowmow/docs/eskf_fusion/debug/run_eskf_compare_20260813_150848.sh \
+  --progress-player
+```
+
 也可以指定一到三个包；顺序就是桌面从左到右的顺序：
 
 ```bash
@@ -79,8 +87,13 @@ bash /home/hulk/ros2bag/progress_player/launch_eskf_multi_replay.sh \
   /path/to/bag_a /path/to/bag_b /path/to/bag_c
 ```
 
-默认从 Domain 181 开始，可通过 `ESKF_MULTI_BASE_DOMAIN` 修改。每列使用独立 Domain，
+默认使用 P92 的 Domain 182～184；可通过 `ESKF_MULTI_BASE_DOMAIN` 修改。每列使用独立 Domain，
 上方 RViz2 和下方进度条标题含相同的序号、bag 名称和 Domain；播放器初始为暂停状态。
+
+ESKF profile 会复用旧对比脚本的 topic 白名单和 remap：`/odometry` 映射到
+`/bag/odometry`，包内 `/fusion_location` 映射到 `/legacy/fusion_location`。受管脚本从 bag
+目录或相邻 `map/` 目录解析唯一的 `target_pos_all_3.yaml`/`target_pos_all_4.yaml`；找不到或
+存在多个候选时拒绝启动，不能静默套用其他包的地图。
 
 选择的目录必须包含 rosbag2 生成的 `metadata.yaml`。
 

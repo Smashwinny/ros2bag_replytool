@@ -3,12 +3,12 @@ set -euo pipefail
 
 player=/home/hulk/ros2bag/rosbag_progress_player.py
 profile=/home/hulk/ros2bag/progress_player/eskf_compare.yaml
-base_domain=${ESKF_MULTI_BASE_DOMAIN:-181}
+base_domain=${ESKF_MULTI_BASE_DOMAIN:-182}
 
 default_bags=(
-  /home/hulk/ros2bag/location_test_20260624_174822
-  /home/hulk/ros2bag/location_test_20260625_144214
-  /home/hulk/ros2bag/chenhanggpngyuan001/location_validation_20260803_133648
+  /home/hulk/ros2bag/bag/rosbag2_2026_08_13-15_08_48
+  /home/hulk/ros2bag/bag/rosbag2_2026_08_13-15_59_53
+  /home/hulk/ros2bag/bag/rosbag2_2026_08_13-17_22_48
 )
 if (($#)); then
   bags=("$@")
@@ -38,7 +38,7 @@ if [[ -z "${DISPLAY:-}" ]]; then
 fi
 
 set +u
-source /opt/ros/humble/setup.bash
+source /home/hulk/mow_mow_agent/mowmow/docs/eskf_fusion/debug/eskf_compare_env.sh
 set -u
 screen=$(xrandr --current | awk '
   / connected/ {
@@ -107,13 +107,16 @@ for index in "${!bags[@]}"; do
   done
 
   if [[ -n "${rviz_id}" ]]; then
+    # RViz may replace its title once after loading the config; wait for that
+    # initialization before assigning the stable bag/domain title.
+    sleep 2
     xdotool set_window --name "${rviz_title}" "${rviz_id}"
     rviz_hex=$(printf '0x%x' "${rviz_id}")
     wmctrl -i -r "${rviz_hex}" -e "0,${x},${screen_y},${width},${rviz_h}"
   else
     echo "WARN: RViz2 window was not found for ${label}." >&2
   fi
-  progress_id=$(xdotool search --name "${progress_title}" 2>/dev/null | head -1 || true)
+  progress_id=$(xdotool search --onlyvisible --pid "${player_pid}" 2>/dev/null | head -1 || true)
   if [[ -n "${progress_id}" ]]; then
     progress_hex=$(printf '0x%x' "${progress_id}")
     wmctrl -i -r "${progress_hex}" \

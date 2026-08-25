@@ -86,6 +86,7 @@ for index in "${!bags[@]}"; do
   rviz_title="[${index}:${label}] RViz2 · Domain ${domain}"
 
   ESKF_COMPARE_BAG="${bag}" ESKF_COMPARE_DOMAIN_ID="${domain}" \
+    ESKF_COMPARE_RVIZ_COMPACT=1 \
     ROS_DOMAIN_ID="${domain}" ROS_LOCALHOST_ONLY=1 \
     python3 "${player}" "${bag}" --profile "${profile}" \
       --title "${progress_title}" --geometry "${width}x${player_h}+${x}+$((screen_y + rviz_h))" &

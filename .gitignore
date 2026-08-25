@@ -1,9 +1,12 @@
 # This repository backs up only the rosbag replay GUI, not local bag data.
 *
 !.gitignore
+!README.md
 !rosbag_progress_player.py
 !ROSBAG_PROGRESS_PLAYER.md
 !REPRODUCE_ESKF_MULTI_REPLAY.md
 !progress_player/
 !progress_player/**
 progress_player/runs/
+progress_player/__pycache__/
+/tmp/

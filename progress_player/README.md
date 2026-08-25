@@ -1,5 +1,7 @@
 # Stateful ROS 2 bag replay
 
+完整安装、启动、过程量和日志管理说明见仓库根目录 [`README.md`](../README.md)。
+
 `rosbag_progress_player.py` has two seek modes:
 
 - without a profile, seek is the native rosbag2 seek and does not reset nodes;
@@ -20,3 +22,8 @@ than ROS time.
 Only values present in the bag can be reconstructed. Parameters, service calls,
 files, device state, or process memory absent from the recording cannot be restored.
 
+The floating inspector implementation lives in this replay-tool repository:
+
+```bash
+python3 /home/hulk/ros2bag/progress_player/eskf_live_inspector.py --help
+```

@@ -1,4 +1,7 @@
 managed_command:
+  - python3
+  - /home/hulk/ros2bag/progress_player/managed_stack_supervisor.py
+  - --
   - bash
   - /home/hulk/mow_mow_agent/mowmow/docs/eskf_fusion/debug/run_eskf_compare.sh
   - --stack-only

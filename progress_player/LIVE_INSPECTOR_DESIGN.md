@@ -21,3 +21,9 @@ Before creating GUI processes, the launcher checks every planned Domain and fail
 the discovered node names when any Domain is occupied. Partial desktops are not an accepted state.
 RViz may restore its saved geometry after the first map event. The launcher therefore records every
 window id and performs two final layout passes only after all selected RViz instances are mapped.
+
+The profile inserts `managed_stack_supervisor.py` between the player and the project debug wrapper.
+The supervisor watches its original parent PID and owns the wrapper in a separate process group. Parent
+loss, SIGINT, SIGTERM, or SIGHUP terminates the whole managed group, with SIGKILL only after timeout.
+The player also wraps `ros2 bag play` with the same supervisor, so forced player loss cannot orphan the
+bag process while the managed ESKF/RViz group is being cleaned independently.

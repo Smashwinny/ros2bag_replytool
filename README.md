@@ -10,6 +10,7 @@ ROS 2 bag 图形化回放与 ESKF 定位调试工具。播放器支持拖动进�
 - `progress_player/eskf_compare.yaml`：ESKF 回放 profile。
 - `progress_player/launch_eskf_multi_replay.sh`：三包多 Domain 桌面布局。
 - `progress_player/eskf_live_inspector.py`：传感器状态、ESKF 过程量和日志管理浮窗。
+- `progress_player/managed_stack_supervisor.py`：播放器消失时清理整棵 ESKF/RViz 进程树。
 - `ROSBAG_PROGRESS_PLAYER.md`：通用播放器参数说明。
 - `REPRODUCE_ESKF_MULTI_REPLAY.md`：完整环境、数据和复现步骤。
 
@@ -51,6 +52,8 @@ RViz 首次映射后可能恢复自身保存的默认窗口尺寸。多开脚本
 
 每列从上到下对应同一个 bag/Domain 的 RViz、浮动过程量窗口和进度条。在启动终端按
 `Ctrl+C` 会结束该次多包回放创建的播放器、ESKF、adapter、RViz 和浮窗。
+`ros2 bag play` 和 ESKF/RViz 托管栈分别经过 supervisor。即使后台终端或播放器被外部直接
+关闭，两个 supervisor 也会检测父 PID 消失并清理各自的独立进程组。
 
 ## 单包回放
 
@@ -89,6 +92,7 @@ bash /home/hulk/mow_mow_agent/mowmow/docs/eskf_fusion/debug/run_eskf_compare.sh 
 cd /home/hulk/ros2bag
 python3 progress_player/test_profile.py
 python3 progress_player/test_eskf_live_inspector.py
+python3 progress_player/test_managed_stack_supervisor.py
 python3 -m py_compile rosbag_progress_player.py progress_player/eskf_live_inspector.py
 bash -n progress_player/launch_eskf_multi_replay.sh
 ```

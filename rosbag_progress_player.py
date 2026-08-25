@@ -337,9 +337,17 @@ class ProgressPlayer:
             "--start-paused", "--disable-keyboard-controls",
         ]
         command.extend(self.profile.get("bag_play_args", []))
+        supervised_command = [
+            sys.executable,
+            str(Path(__file__).resolve().parent / "progress_player" /
+                "managed_stack_supervisor.py"),
+            "--",
+            *command,
+        ]
         try:
             self.process = subprocess.Popen(
-                command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                supervised_command, env=env,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True)
             self.start_managed_process(env, log_dir)
         except OSError as exc:

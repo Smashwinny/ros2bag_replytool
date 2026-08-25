@@ -6,6 +6,13 @@ cwd: /home/hulk/mow_mow_agent/mowmow
 rebuild_rate: 10.0
 startup_wait_s: 2.0
 checkpoint_restore: true
+bag_target_map:
+  /home/hulk/ros2bag/rosbag2_2026_08_07-15_56_44: /home/hulk/ros2bag/rosbag2_2026_08_07-15_56_44/target_pos_all_3.yaml
+  /home/hulk/ros2bag/rosbag2_2026_08_07-16_40_39: /home/hulk/ros2bag/rosbag2_2026_08_07-16_40_39/target_pos_all_4.yaml
+  /home/hulk/ros2bag/bag/rosbag2_2026_08_13-15_08_48: /home/hulk/ros2bag/bag/rosbag2_2026_08_13-15_08_48/target_pos_all_3.yaml
+  /home/hulk/ros2bag/bag/rosbag2_2026_08_13-15_59_53: /home/hulk/ros2bag/bag/rosbag2_2026_08_13-15_59_53/target_pos_all_3.yaml
+  /home/hulk/ros2bag/bag/rosbag2_2026_08_13-17_22_48: /home/hulk/ros2bag/bag/rosbag2_2026_08_13-17_22_48/target_pos_all_3.yaml
+  /home/hulk/ros2bag/chenhanggpngyuan001/location_validation_20260803_133648: /home/hulk/ros2bag/chenhanggpngyuan001/map/target_pos_all_3.yaml
 bag_play_args:
   - --topics
   - /imu

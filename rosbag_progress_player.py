@@ -74,6 +74,15 @@ def read_profile(path: Path | None) -> dict:
             isinstance(value, str) for value in bag_play_args):
         raise ValueError("profile bag_play_args 必须是字符串列表")
     profile["bag_play_args"] = bag_play_args
+    bag_target_map = profile.get("bag_target_map", {})
+    if not isinstance(bag_target_map, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in bag_target_map.items()):
+        raise ValueError("profile bag_target_map 必须是 bag 路径到 YAML 路径的字符串映射")
+    profile["bag_target_map"] = {
+        str(Path(key).resolve()): str(Path(value).resolve())
+        for key, value in bag_target_map.items()
+    }
     extra_env = profile.get("env", {})
     if not isinstance(extra_env, dict) or not all(
             isinstance(key, str) and isinstance(value, (str, int, float, bool))
@@ -81,6 +90,19 @@ def read_profile(path: Path | None) -> dict:
         raise ValueError("env 必须是标量键值 mapping")
     profile["env"] = {key: str(value) for key, value in extra_env.items()}
     return profile
+
+
+def resolve_target_yaml(profile: dict, bag_dir: Path) -> str | None:
+    target_map = profile.get("bag_target_map", {})
+    if not target_map:
+        return None
+    target_yaml = target_map.get(str(bag_dir.resolve()))
+    if target_yaml is None:
+        raise ValueError(
+            f"当前 profile 没有登记该 bag 对应的 target YAML：{bag_dir.resolve()}")
+    if not Path(target_yaml).is_file():
+        raise ValueError(f"对应 target YAML 不存在：{target_yaml}")
+    return target_yaml
 
 
 class PlayerControl(Node):
@@ -225,6 +247,7 @@ class ProgressPlayer:
             domain_id = int(self.domain_var.get())
             if not 0 <= domain_id <= 232:
                 raise ValueError("ROS_DOMAIN_ID 必须在 0～232 之间")
+            target_yaml = resolve_target_yaml(self.profile, bag_dir)
         except Exception as exc:
             messagebox.showerror("无法打开 Bag", str(exc))
             return
@@ -241,6 +264,9 @@ class ProgressPlayer:
         env["ROS_LOG_DIR"] = log_dir
         env["ROS_DOMAIN_ID"] = str(domain_id)
         env["ROS_LOCALHOST_ONLY"] = "1" if self.localhost_var.get() else "0"
+        env["ESKF_COMPARE_BAG"] = str(bag_dir)
+        if target_yaml is not None:
+            env["ESKF_COMPARE_TARGET_YAML"] = target_yaml
         self.active_domain_id = domain_id
         self.active_localhost = self.localhost_var.get()
         # ROS_LOCALHOST_ONLY is consumed by the RMW implementation when this

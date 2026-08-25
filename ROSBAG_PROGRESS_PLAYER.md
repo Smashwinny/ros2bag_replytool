@@ -91,9 +91,9 @@ bash /home/hulk/ros2bag/progress_player/launch_eskf_multi_replay.sh \
 上方 RViz2 和下方进度条标题含相同的序号、bag 名称和 Domain；播放器初始为暂停状态。
 
 ESKF profile 会复用旧对比脚本的 topic 白名单和 remap：`/odometry` 映射到
-`/bag/odometry`，包内 `/fusion_location` 映射到 `/legacy/fusion_location`。受管脚本从 bag
-目录或相邻 `map/` 目录解析唯一的 `target_pos_all_3.yaml`/`target_pos_all_4.yaml`；找不到或
-存在多个候选时拒绝启动，不能静默套用其他包的地图。
+`/bag/odometry`，包内 `/fusion_location` 映射到 `/legacy/fusion_location`。bag 与 target YAML
+的关系来自 `QUICK_OLD_NEW_COMPARE.md` 中已有包装脚本，并显式登记在 profile 的
+`bag_target_map`；未登记的 bag 拒绝启动，不能靠同名文件或目录位置猜地图。
 
 选择的目录必须包含 rosbag2 生成的 `metadata.yaml`。
 

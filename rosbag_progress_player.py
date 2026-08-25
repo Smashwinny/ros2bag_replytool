@@ -26,6 +26,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from rosgraph_msgs.msg import Clock
 from std_msgs.msg import Float64, String
 from rosbag2_interfaces.srv import Pause, Resume, Seek, SetRate
+from std_msgs.msg import Float64
 
 
 PLAYER_NODE = "/rosbag2_player"
@@ -157,6 +158,8 @@ class PlayerControl(Node):
                        durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.restore_publisher = self.create_publisher(
             Float64, "/eskf/replay_restore_request", 1)
+        self.visual_seek_publisher = self.create_publisher(
+            Float64, "/rosbag_progress/visual_seek", 10)
         self.pause_client = self.create_client(Pause, f"{PLAYER_NODE}/pause")
         self.resume_client = self.create_client(Resume, f"{PLAYER_NODE}/resume")
         self.seek_client = self.create_client(Seek, f"{PLAYER_NODE}/seek")
@@ -186,6 +189,11 @@ class PlayerControl(Node):
         message = Float64()
         message.data = stamp_s
         self.restore_publisher.publish(message)
+
+    def announce_visual_seek(self, stamp_s: float):
+        message = Float64()
+        message.data = stamp_s
+        self.visual_seek_publisher.publish(message)
 
 
 class ProgressPlayer:
@@ -461,6 +469,7 @@ class ProgressPlayer:
         """Restart managed state and replay every recorded input up to target."""
         if self.node is None or not self.node.ready() or self.rebuild_target_ns is not None:
             return
+        self.node.announce_visual_seek(target_ns / 1e9)
         if not self.profile.get("managed_command"):
             self.current_ns = target_ns
             future = self.node.seek(target_ns)

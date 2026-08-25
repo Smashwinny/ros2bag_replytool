@@ -3,6 +3,7 @@
 !.gitignore
 !rosbag_progress_player.py
 !ROSBAG_PROGRESS_PLAYER.md
+!REPRODUCE_ESKF_MULTI_REPLAY.md
 !progress_player/
 !progress_player/**
 progress_player/runs/

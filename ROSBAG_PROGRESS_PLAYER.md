@@ -1,5 +1,8 @@
 # ROS 2 Bag 进度回放工具
 
+ESKF 三包对比的完整版本锁定、数据校验和验收步骤见
+[`REPRODUCE_ESKF_MULTI_REPLAY.md`](REPRODUCE_ESKF_MULTI_REPLAY.md)。
+
 这是一个面向 ROS 2 Humble 的桌面回放工具。它为 `ros2 bag play` 增加可拖动的
 时间进度条，并提供播放、暂停、跳转、倍速、Domain ID 和仅本机通信配置。
 

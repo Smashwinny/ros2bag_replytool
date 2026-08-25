@@ -130,11 +130,12 @@ class PlayerControl(Node):
 
 
 class ProgressPlayer:
-    def __init__(self, root: tk.Tk, initial_bag: str | None, profile_path: str | None):
+    def __init__(self, root: tk.Tk, initial_bag: str | None, profile_path: str | None,
+                 title: str | None = None, geometry: str | None = None):
         self.root = root
-        self.root.title("ROS 2 Bag 进度播放器")
-        self.root.geometry("820x310")
-        self.root.minsize(680, 290)
+        self.root.title(title or "ROS 2 Bag 进度播放器")
+        self.root.geometry(geometry or "820x310")
+        self.root.minsize(480 if geometry else 680, 290)
 
         self.bag_dir: Path | None = None
         self.start_ns = 0
@@ -523,9 +524,11 @@ def main():
     parser = argparse.ArgumentParser(description="ROS 2 bag player with a seekable progress bar")
     parser.add_argument("bag", nargs="?", help="bag directory or metadata.yaml")
     parser.add_argument("--profile", help="YAML profile containing a managed stateful command")
+    parser.add_argument("--title", help="window title used by multi-bag layouts")
+    parser.add_argument("--geometry", help="Tk geometry, for example 640x310+0+770")
     args = parser.parse_args()
     root = tk.Tk()
-    ProgressPlayer(root, args.bag, args.profile)
+    ProgressPlayer(root, args.bag, args.profile, args.title, args.geometry)
     root.mainloop()
 
 

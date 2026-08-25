@@ -66,6 +66,22 @@ ESKF 对比统一入口：
 bash /home/hulk/mow_mow_agent/mowmow/docs/eskf_fusion/debug/run_eskf_compare.sh --progress-player
 ```
 
+同时展示三个相互隔离的 ESKF 数据包，并自动排列 RViz2 与进度条：
+
+```bash
+bash /home/hulk/ros2bag/progress_player/launch_eskf_multi_replay.sh
+```
+
+也可以指定一到三个包；顺序就是桌面从左到右的顺序：
+
+```bash
+bash /home/hulk/ros2bag/progress_player/launch_eskf_multi_replay.sh \
+  /path/to/bag_a /path/to/bag_b /path/to/bag_c
+```
+
+默认从 Domain 181 开始，可通过 `ESKF_MULTI_BASE_DOMAIN` 修改。每列使用独立 Domain，
+上方 RViz2 和下方进度条标题含相同的序号、bag 名称和 Domain；播放器初始为暂停状态。
+
 选择的目录必须包含 rosbag2 生成的 `metadata.yaml`。
 
 ## 使用方法

@@ -10,7 +10,33 @@ default_bags=(
   /home/hulk/ros2bag/rosbag2_2026_08_07-16_40_39
   /home/hulk/ros2bag/bag/rosbag2_2026_08_13-15_08_48
 )
-if (($#)); then
+selectable_bags=(
+  "${default_bags[@]}"
+  /home/hulk/ros2bag/bag/rosbag2_2026_08_13-15_59_53
+  /home/hulk/ros2bag/bag/rosbag2_2026_08_13-17_22_48
+)
+if [[ "${1:-}" == "--select" ]]; then
+  shift
+  if (($#)); then
+    echo "ERROR: --select does not accept bag arguments." >&2
+    exit 2
+  fi
+  if ! command -v zenity >/dev/null; then
+    echo "ERROR: zenity is required for --select." >&2
+    exit 2
+  fi
+  selection_args=()
+  for bag in "${selectable_bags[@]}"; do
+    selection_args+=(FALSE "$(basename "${bag}")" "${bag}")
+  done
+  selected=$(zenity --list --checklist --print-column=3 --separator=$'\n' \
+    --title="选择 1～3 个 ESKF 回放包" --width=900 --height=430 \
+    --text="勾选要同时回放的数据包（最多 3 个）" \
+    --column="选择" --column="数据包" --column="完整路径" \
+    "${selection_args[@]}") || exit 0
+  mapfile -t bags <<<"${selected}"
+  if ((${#bags[@]} == 1)) && [[ -z "${bags[0]}" ]]; then bags=(); fi
+elif (($#)); then
   bags=("$@")
 else
   bags=("${default_bags[@]}")
@@ -59,6 +85,12 @@ rviz_h=$((screen_h - player_h))
 status_h=118
 
 players=()
+labels=()
+domains=()
+xs=()
+widths=()
+progress_titles=()
+rviz_titles=()
 descendants() {
   local parent=$1 child
   while read -r child; do
@@ -95,8 +127,22 @@ for index in "${!bags[@]}"; do
     python3 "${player}" "${bag}" --profile "${profile}" \
       --title "${progress_title}" --geometry "${width}x${player_h}+${x}+$((screen_y + rviz_h))" &
   players+=("$!")
+  labels+=("${label}")
+  domains+=("${domain}")
+  xs+=("${x}")
+  widths+=("${width}")
+  progress_titles+=("${progress_title}")
+  rviz_titles+=("${rviz_title}")
+done
 
+for index in "${!players[@]}"; do
   player_pid=${players[$index]}
+  label=${labels[$index]}
+  domain=${domains[$index]}
+  x=${xs[$index]}
+  width=${widths[$index]}
+  progress_title=${progress_titles[$index]}
+  rviz_title=${rviz_titles[$index]}
   rviz_pid=""
   rviz_id=""
   for _ in {1..300}; do

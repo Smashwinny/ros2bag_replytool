@@ -13,3 +13,7 @@ they stop.
 Opening the directory and deleting completed logs are user-triggered desktop actions. Deletion is
 permanent. Unit tests cover partial JSON lines, truncation, summaries, byte formatting, path rejection,
 and preservation of simultaneous Domain runs.
+
+The multi launcher starts every selected player before waiting for any RViz window. `--select` uses a
+Zenity checklist over the profile's registered bag set; positional paths remain available for scripted
+runs. Selection is limited to three bags because the desktop layout has three columns.

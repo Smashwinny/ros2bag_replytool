@@ -87,7 +87,8 @@ bash /home/hulk/ros2bag/progress_player/launch_eskf_multi_replay.sh \
   /path/to/bag_a /path/to/bag_b /path/to/bag_c
 ```
 
-默认使用 P92 的 Domain 182～184；可通过 `ESKF_MULTI_BASE_DOMAIN` 修改。每列使用独立 Domain，
+默认使用 QUICK 文档前三个不同入口及 Domain 180～182：2026-08-07 target3、2026-08-07
+target4、2026-08-13 target3。可通过 `ESKF_MULTI_BASE_DOMAIN` 修改。每列使用独立 Domain，
 上方 RViz2 和下方进度条标题含相同的序号、bag 名称和 Domain；播放器初始为暂停状态。
 
 ESKF profile 会复用旧对比脚本的 topic 白名单和 remap：`/odometry` 映射到

@@ -3,12 +3,12 @@ set -euo pipefail
 
 player=/home/hulk/ros2bag/rosbag_progress_player.py
 profile=/home/hulk/ros2bag/progress_player/eskf_compare.yaml
-base_domain=${ESKF_MULTI_BASE_DOMAIN:-182}
+base_domain=${ESKF_MULTI_BASE_DOMAIN:-180}
 
 default_bags=(
+  /home/hulk/ros2bag/rosbag2_2026_08_07-15_56_44
+  /home/hulk/ros2bag/rosbag2_2026_08_07-16_40_39
   /home/hulk/ros2bag/bag/rosbag2_2026_08_13-15_08_48
-  /home/hulk/ros2bag/bag/rosbag2_2026_08_13-15_59_53
-  /home/hulk/ros2bag/bag/rosbag2_2026_08_13-17_22_48
 )
 if (($#)); then
   bags=("$@")

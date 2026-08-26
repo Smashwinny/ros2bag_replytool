@@ -9,6 +9,7 @@ cwd: /home/hulk/mow_mow_agent/mowmow
 rebuild_rate: 10.0
 startup_wait_s: 2.0
 checkpoint_restore: true
+ordinal_reader: true
 bag_target_map:
   /home/hulk/ros2bag/rosbag2_2026_08_07-15_56_44: /home/hulk/ros2bag/rosbag2_2026_08_07-15_56_44/target_pos_all_3.yaml
   /home/hulk/ros2bag/rosbag2_2026_08_07-16_40_39: /home/hulk/ros2bag/rosbag2_2026_08_07-16_40_39/target_pos_all_4.yaml

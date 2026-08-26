@@ -33,6 +33,7 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(profile["rebuild_rate"], 20.0)
         self.assertEqual(profile["env"], {"FLAG": "1"})
         self.assertTrue(profile["checkpoint_restore"])
+        self.assertFalse(profile["ordinal_reader"])
         self.assertEqual(
             profile["bag_play_args"], ["--remap", "/odometry:=/bag/odometry"])
         self.assertEqual(profile["bag_target_map"], {"/bags/a": "/maps/a.yaml"})
@@ -40,6 +41,10 @@ class ProfileTest(unittest.TestCase):
     def test_shell_string_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "字符串数组"):
             MODULE.read_profile(self.write("managed_command: bash run.sh\n"))
+
+    def test_ordinal_reader_requires_checkpoint_restore(self):
+        with self.assertRaisesRegex(ValueError, "checkpoint_restore"):
+            MODULE.read_profile(self.write("ordinal_reader: true\n"))
 
     def test_rate_is_bounded(self):
         with self.assertRaisesRegex(ValueError, "1～100"):
@@ -56,6 +61,7 @@ class ProfileTest(unittest.TestCase):
     def test_documented_bag_resolves_exact_yaml(self):
         profile = MODULE.read_profile(
             Path(__file__).with_name("eskf_compare.yaml"))
+        self.assertTrue(profile["ordinal_reader"])
         bag = Path("/home/hulk/ros2bag/rosbag2_2026_08_07-16_40_39")
         self.assertEqual(
             MODULE.resolve_target_yaml(profile, bag),

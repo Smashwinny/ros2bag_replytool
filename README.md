@@ -98,3 +98,18 @@ bash -n progress_player/launch_eskf_multi_replay.sh
 ```
 
 当前 ESKF 检查点功能位于 `feature/eskf-replay-checkpoint` 分支。
+
+该专项 profile 默认使用 `progress_player/ordinal_replay_reader.py`，不再调用
+`ros2 bag play` 给 ESKF 注入数据。reader 首次顺序读取 storage，给每条原始 bag 记录
+分配全局 `bag_ordinal`；IMU、GPS、Odom、Cmd 通过单一
+`/eskf/replay_ingress` 发送，并等待相同 `(epoch, bag_ordinal)` 的 ACK 后才发送下一条。
+这保证相同时间戳记录仍按 storage 原始顺序执行。
+
+`eskf_compare.yaml` 中必须同时设置：
+
+```yaml
+checkpoint_restore: true
+ordinal_reader: true
+```
+
+普通 profile 不设置 `ordinal_reader` 时仍使用标准 `ros2 bag play`。

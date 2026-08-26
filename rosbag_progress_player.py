@@ -104,6 +104,9 @@ def read_profile(path: Path | None) -> dict:
     profile["rebuild_rate"] = rate
     profile["startup_wait_s"] = max(0.0, float(profile.get("startup_wait_s", 2.0)))
     profile["checkpoint_restore"] = bool(profile.get("checkpoint_restore", False))
+    profile["ordinal_reader"] = bool(profile.get("ordinal_reader", False))
+    if profile["ordinal_reader"] and not profile["checkpoint_restore"]:
+        raise ValueError("ordinal_reader 必须与 checkpoint_restore 一起启用")
     bag_play_args = profile.get("bag_play_args", [])
     if not isinstance(bag_play_args, list) or not all(
             isinstance(value, str) for value in bag_play_args):
@@ -141,7 +144,8 @@ def resolve_target_yaml(profile: dict, bag_dir: Path) -> str | None:
 
 
 class PlayerControl(Node):
-    def __init__(self, on_clock, on_restore_result, context: Context):
+    def __init__(self, on_clock, on_restore_result, on_ordinal_seek_result,
+                 context: Context):
         super().__init__("rosbag_progress_control", context=context)
         # rosbag2 Player publishes /clock as BEST_EFFORT on Humble.  The
         # default integer-depth subscription is RELIABLE and therefore cannot
@@ -158,6 +162,9 @@ class PlayerControl(Node):
             QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
                        reliability=ReliabilityPolicy.RELIABLE,
                        durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.create_subscription(
+            String, "/rosbag_progress/ordinal_seek_result",
+            on_ordinal_seek_result, 10)
         self.restore_publisher = self.create_publisher(
             Float64, "/eskf/replay_restore_request", 1)
         self.visual_seek_publisher = self.create_publisher(
@@ -166,6 +173,8 @@ class PlayerControl(Node):
             String, "/rosbag_progress/replay_epoch", 10)
         self.replay_seal_publisher = self.create_publisher(
             String, "/eskf/replay_seal_request", 1)
+        self.ordinal_seek_publisher = self.create_publisher(
+            String, "/rosbag_progress/ordinal_seek_request", 10)
         self.pause_client = self.create_client(Pause, f"{PLAYER_NODE}/pause")
         self.resume_client = self.create_client(Resume, f"{PLAYER_NODE}/resume")
         self.seek_client = self.create_client(Seek, f"{PLAYER_NODE}/seek")
@@ -217,6 +226,15 @@ class PlayerControl(Node):
             "final_ns": final_ns,
         }, separators=(",", ":"), sort_keys=True)
         self.replay_seal_publisher.publish(message)
+
+    def seek_ordinal(self, epoch: int, bag_ordinal: int):
+        message = String()
+        message.data = json.dumps({
+            "schema": "rosbag_ordinal_seek/v1",
+            "epoch": epoch,
+            "bag_ordinal": bag_ordinal,
+        }, separators=(",", ":"), sort_keys=True)
+        self.ordinal_seek_publisher.publish(message)
 
 
 class ProgressPlayer:
@@ -358,11 +376,19 @@ class ProgressPlayer:
             self.stop_ros()
             messagebox.showerror("DDS 初始化失败", str(exc))
             return
-        command = [
-            "ros2", "bag", "play", str(bag_dir), "--clock", "30",
-            "--start-paused", "--disable-keyboard-controls",
-        ]
-        command.extend(self.profile.get("bag_play_args", []))
+        if self.profile.get("ordinal_reader"):
+            command = [
+                sys.executable,
+                str(Path(__file__).resolve().parent / "progress_player" /
+                    "ordinal_replay_reader.py"),
+                str(bag_dir),
+            ]
+        else:
+            command = [
+                "ros2", "bag", "play", str(bag_dir), "--clock", "30",
+                "--start-paused", "--disable-keyboard-controls",
+            ]
+            command.extend(self.profile.get("bag_play_args", []))
         supervised_command = [
             sys.executable,
             str(Path(__file__).resolve().parent / "progress_player" /
@@ -390,7 +416,9 @@ class ProgressPlayer:
     def start_ros(self, domain_id: int):
         self.context = Context()
         rclpy.init(args=None, context=self.context, domain_id=domain_id)
-        self.node = PlayerControl(self.on_clock, self.on_restore_result, self.context)
+        self.node = PlayerControl(
+            self.on_clock, self.on_restore_result,
+            self.on_ordinal_seek_result, self.context)
         self.executor = SingleThreadedExecutor(context=self.context)
         self.executor.add_node(self.node)
         self.ros_stop_event = threading.Event()
@@ -561,6 +589,13 @@ class ProgressPlayer:
             checkpoint_ns = int(round(float(result["checkpoint_stamp_s"]) * 1e9))
             self.current_ns = checkpoint_ns
             self.rebuild_target_ns = target_ns
+            checkpoint_ordinal = result.get("checkpoint_bag_ordinal")
+            if self.profile.get("ordinal_reader"):
+                if checkpoint_ordinal is None:
+                    raise RuntimeError("checkpoint 没有 bag ordinal")
+                self.node.seek_ordinal(
+                    self.epoch_clock.current, int(checkpoint_ordinal) + 1)
+                return
             future = self.node.seek(checkpoint_ns + 1)
             future.add_done_callback(
                 lambda completed: self.root.after(
@@ -568,9 +603,28 @@ class ProgressPlayer:
         except Exception as exc:
             self.status_var.set(f"Checkpoint 恢复失败：{exc}")
 
+    def on_ordinal_seek_result(self, message: String):
+        self.root.after(0, self.handle_ordinal_seek_result, message.data)
+
+    def handle_ordinal_seek_result(self, payload: str):
+        if self.rebuild_target_ns is None:
+            return
+        try:
+            result = json.loads(payload)
+            if result.get("schema") != "rosbag_ordinal_seek_result/v1":
+                return
+            if int(result.get("epoch", -1)) != self.epoch_clock.current:
+                return
+            if not result.get("success"):
+                raise RuntimeError(result.get("reason", "ordinal seek rejected"))
+            self.begin_checkpoint_forward_replay(None)
+        except Exception as exc:
+            self.rebuild_target_ns = None
+            self.status_var.set(f"Ordinal 补算定位失败：{exc}")
+
     def begin_checkpoint_forward_replay(self, future):
         try:
-            if not future.result().success:
+            if future is not None and not future.result().success:
                 raise RuntimeError("rosbag reader 无法定位到 checkpoint cursor")
             self.node.set_rate(1.0)
             self.node.resume()

@@ -4,6 +4,9 @@ import math
 import struct
 
 
+FULL_CHECKPOINT_FIELD_COUNT = 104
+
+
 def _number(value):
     number = float(value)
     if not math.isfinite(number):
@@ -42,10 +45,19 @@ def snapshot_hashes(snapshot):
     state = snapshot["nominal_state_pvqwxyz_bg_ba"]
     covariance = snapshot["covariance_row_major"]
     trajectory = snapshot["output_trajectory"]
+    full_checkpoint = snapshot["full_checkpoint_state"]
     if len(state) != 16:
         raise ValueError("nominal state must contain 16 doubles")
     if len(covariance) != 225:
         raise ValueError("covariance must contain 225 doubles")
+    if (not isinstance(full_checkpoint, dict) or
+            len(full_checkpoint) != FULL_CHECKPOINT_FIELD_COUNT):
+        raise ValueError("full checkpoint state manifest is missing")
+    for field, digest in full_checkpoint.items():
+        if (not isinstance(field, str) or not isinstance(digest, str) or
+                len(digest) != 64 or
+                any(char not in "0123456789abcdef" for char in digest)):
+            raise ValueError("invalid full checkpoint field digest")
     trajectory_bytes = bytearray()
     for row in trajectory:
         if len(row) != 9:
@@ -56,7 +68,9 @@ def snapshot_hashes(snapshot):
         trajectory_bytes.extend(struct.pack(">Q", ordinal))
         trajectory_bytes.extend(_double_bytes(row[1:]))
     return {
-        "state_sha256": hashlib.sha256(_canonical([
+        "state_sha256": hashlib.sha256(
+            _canonical(full_checkpoint)).hexdigest(),
+        "state_summary_sha256": hashlib.sha256(_canonical([
             state, snapshot["node_state_summary"]])).hexdigest(),
         "covariance_sha256": hashlib.sha256(_double_bytes(covariance)).hexdigest(),
         "trajectory_sha256": hashlib.sha256(trajectory_bytes).hexdigest(),
@@ -99,8 +113,7 @@ def first_differences(snapshots):
     if len(snapshots) != 3:
         raise ValueError("bit-exact audit requires exactly three snapshots")
     categories = {
-        "state": lambda value: [value["nominal_state_pvqwxyz_bg_ba"],
-                                value["node_state_summary"]],
+        "state": lambda value: value["full_checkpoint_state"],
         "covariance": lambda value: value["covariance_row_major"],
         "trajectory": lambda value: value["output_trajectory"],
     }

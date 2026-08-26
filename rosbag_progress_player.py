@@ -19,8 +19,9 @@ import yaml
 import json
 
 from progress_player.replay_history import ReplayEpochClock
-from progress_player.determinism import (compare_three, first_differences,
-                                         snapshot_hashes)
+from progress_player.determinism import (
+    FULL_CHECKPOINT_FIELD_COUNT, compare_three, first_differences,
+    snapshot_hashes)
 
 import rclpy
 from rclpy.node import Node
@@ -797,7 +798,7 @@ class ProgressPlayer:
             return
         try:
             snapshot = json.loads(payload)
-            if (snapshot.get("schema") != "eskf_replay_snapshot/v1" or
+            if (snapshot.get("schema") != "eskf_replay_snapshot/v2" or
                     int(snapshot.get("epoch", -1)) != self.epoch_clock.current):
                 return
             if not snapshot.get("success"):
@@ -812,19 +813,24 @@ class ProgressPlayer:
             final_log_size = self.active_process_log_size()
             checkpoint_counts = [int(snapshot["node_state_summary"][
                 "full_replay_checkpoints"]) for snapshot in self.determinism_snapshots]
+            manifest_counts = [len(snapshot["full_checkpoint_state"])
+                               for snapshot in self.determinism_snapshots]
             immutable = (self.sealed_checkpoint_count is not None and
                          all(count == self.sealed_checkpoint_count
                              for count in checkpoint_counts) and
+                         all(count == FULL_CHECKPOINT_FIELD_COUNT
+                             for count in manifest_counts) and
                          self.sealed_log_size is not None and
                          final_log_size == self.sealed_log_size)
             comparison["bit_exact"] = comparison["bit_exact"] and immutable
-            report = {"schema": "eskf_bit_exact_report/v1",
+            report = {"schema": "eskf_bit_exact_report/v2",
                       "bag": str(self.bag_dir),
                       "target_ns": self.determinism_target_ns,
                       "target_ordinal": self.determinism_target_ordinal,
                       "runs": self.determinism_runs,
                       "sealed_checkpoint_count": self.sealed_checkpoint_count,
                       "checkpoint_counts_after_runs": checkpoint_counts,
+                      "full_checkpoint_manifest_counts": manifest_counts,
                       "sealed_log_size": self.sealed_log_size,
                       "final_log_size": final_log_size,
                       "first_pass_storage_immutable": immutable,

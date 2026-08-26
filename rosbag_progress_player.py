@@ -18,6 +18,8 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 import yaml
 import json
 
+from progress_player.replay_history import ReplayEpochClock
+
 import rclpy
 from rclpy.node import Node
 from rclpy.context import Context
@@ -160,6 +162,10 @@ class PlayerControl(Node):
             Float64, "/eskf/replay_restore_request", 1)
         self.visual_seek_publisher = self.create_publisher(
             Float64, "/rosbag_progress/visual_seek", 10)
+        self.replay_epoch_publisher = self.create_publisher(
+            String, "/rosbag_progress/replay_epoch", 10)
+        self.replay_seal_publisher = self.create_publisher(
+            String, "/eskf/replay_seal_request", 1)
         self.pause_client = self.create_client(Pause, f"{PLAYER_NODE}/pause")
         self.resume_client = self.create_client(Resume, f"{PLAYER_NODE}/resume")
         self.seek_client = self.create_client(Seek, f"{PLAYER_NODE}/seek")
@@ -190,10 +196,27 @@ class PlayerControl(Node):
         message.data = stamp_s
         self.restore_publisher.publish(message)
 
-    def announce_visual_seek(self, stamp_s: float):
+    def announce_visual_seek(self, stamp_s: float, epoch: int,
+                             first_pass_complete: bool):
         message = Float64()
         message.data = stamp_s
         self.visual_seek_publisher.publish(message)
+        epoch_message = String()
+        epoch_message.data = json.dumps({
+            "schema": "rosbag_replay_epoch/v1",
+            "epoch": epoch,
+            "target_ns": int(round(stamp_s * 1e9)),
+            "first_pass_complete": first_pass_complete,
+        }, separators=(",", ":"), sort_keys=True)
+        self.replay_epoch_publisher.publish(epoch_message)
+
+    def seal_first_pass(self, final_ns: int):
+        message = String()
+        message.data = json.dumps({
+            "schema": "eskf_replay_seal/v1",
+            "final_ns": final_ns,
+        }, separators=(",", ":"), sort_keys=True)
+        self.replay_seal_publisher.publish(message)
 
 
 class ProgressPlayer:
@@ -223,6 +246,8 @@ class ProgressPlayer:
         self.ros_stop_event: threading.Event | None = None
         self.active_domain_id = 0
         self.active_localhost = True
+        self.epoch_clock = ReplayEpochClock()
+        self.first_pass_complete = False
 
         self.path_var = tk.StringVar(value="尚未选择 bag")
         self.status_var = tk.StringVar(value="请选择含 metadata.yaml 的 bag 目录")
@@ -309,6 +334,7 @@ class ProgressPlayer:
         self.stop_ros()
         self.bag_dir, self.start_ns, self.duration_ns = bag_dir, start_ns, duration_ns
         self.current_ns = start_ns
+        self.first_pass_complete = False
         self.paused = True
         self.path_var.set(str(bag_dir))
         self.status_var.set("正在启动播放器…")
@@ -383,6 +409,9 @@ class ProgressPlayer:
                 self.current_ns >= self.start_ns + self.duration_ns - 100_000_000):
             self.node.pause()
             self.paused = True
+            if not self.first_pass_complete:
+                self.first_pass_complete = True
+                self.node.seal_first_pass(self.current_ns)
 
     def refresh_ui(self):
         if self.process and self.process.poll() is not None:
@@ -477,7 +506,9 @@ class ProgressPlayer:
         """Restart managed state and replay every recorded input up to target."""
         if self.node is None or not self.node.ready() or self.rebuild_target_ns is not None:
             return
-        self.node.announce_visual_seek(target_ns / 1e9)
+        epoch = self.epoch_clock.next(target_ns, self.first_pass_complete)
+        self.node.announce_visual_seek(
+            target_ns / 1e9, epoch.epoch, epoch.first_pass_complete)
         if not self.profile.get("managed_command"):
             self.current_ns = target_ns
             future = self.node.seek(target_ns)

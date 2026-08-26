@@ -113,3 +113,16 @@ ordinal_reader: true
 ```
 
 普通 profile 不设置 `ordinal_reader` 时仍使用标准 `ros2 bag play`。
+
+专项模式第一次必须完整播放到 EOF。reader 收到最后一条 ESKF ACK 后才请求封存过程
+日志和冻结 checkpoint；封存 ACK 返回前，进度条拒绝恢复。之后每次拖动或指定时刻会
+自动执行三个新 replay epoch，在同一 `target_ordinal` 停住并比较：
+
+- 完整名义状态、会影响后续决策的节点状态及最后一次 computation trace；
+- 15×15 协方差的 225 个 binary64 元素；
+- 本 epoch 实际发布的输出轨迹（ordinal、时间、位置和姿态）。
+
+规范编码统一将 `-0` 转为 `+0`、拒绝 NaN/Inf，并使用固定 big-endian 字节生成
+SHA-256。结果保存在 `determinism_reports/target_<ns>_<time>.json`。只有三类哈希
+全部一致，且首次日志字节数和 checkpoint 数量在三轮前后不变，界面才显示
+`bit-exact 通过`；失败报告包含首个不同字段或矩阵/轨迹下标。

@@ -19,6 +19,8 @@ import yaml
 import json
 
 from progress_player.replay_history import ReplayEpochClock
+from progress_player.determinism import (compare_three, first_differences,
+                                         snapshot_hashes)
 
 import rclpy
 from rclpy.node import Node
@@ -28,7 +30,6 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from rosgraph_msgs.msg import Clock
 from std_msgs.msg import Float64, String
 from rosbag2_interfaces.srv import Pause, Resume, Seek, SetRate
-from std_msgs.msg import Float64
 
 
 PLAYER_NODE = "/rosbag2_player"
@@ -145,7 +146,8 @@ def resolve_target_yaml(profile: dict, bag_dir: Path) -> str | None:
 
 class PlayerControl(Node):
     def __init__(self, on_clock, on_restore_result, on_ordinal_seek_result,
-                 context: Context):
+                 on_target_ordinal_result, on_reader_status,
+                 on_snapshot_result, on_seal_result, context: Context):
         super().__init__("rosbag_progress_control", context=context)
         # rosbag2 Player publishes /clock as BEST_EFFORT on Humble.  The
         # default integer-depth subscription is RELIABLE and therefore cannot
@@ -165,6 +167,17 @@ class PlayerControl(Node):
         self.create_subscription(
             String, "/rosbag_progress/ordinal_seek_result",
             on_ordinal_seek_result, 10)
+        self.create_subscription(String, "/rosbag_progress/target_ordinal_result",
+                                 on_target_ordinal_result, 10)
+        self.create_subscription(String, "/rosbag_progress/ordinal_reader_status",
+                                 on_reader_status, 10)
+        result_qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
+                                reliability=ReliabilityPolicy.RELIABLE,
+                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(String, "/eskf/replay_snapshot_result",
+                                 on_snapshot_result, result_qos)
+        self.create_subscription(String, "/eskf/replay_seal_result",
+                                 on_seal_result, result_qos)
         self.restore_publisher = self.create_publisher(
             Float64, "/eskf/replay_restore_request", 1)
         self.visual_seek_publisher = self.create_publisher(
@@ -175,6 +188,12 @@ class PlayerControl(Node):
             String, "/eskf/replay_seal_request", 1)
         self.ordinal_seek_publisher = self.create_publisher(
             String, "/rosbag_progress/ordinal_seek_request", 10)
+        self.target_ordinal_publisher = self.create_publisher(
+            String, "/rosbag_progress/target_ordinal_request", 10)
+        self.ordinal_restore_publisher = self.create_publisher(
+            String, "/eskf/replay_restore_ordinal_request", 10)
+        self.snapshot_publisher = self.create_publisher(
+            String, "/eskf/replay_snapshot_request", 10)
         self.pause_client = self.create_client(Pause, f"{PLAYER_NODE}/pause")
         self.resume_client = self.create_client(Resume, f"{PLAYER_NODE}/resume")
         self.seek_client = self.create_client(Seek, f"{PLAYER_NODE}/seek")
@@ -236,6 +255,27 @@ class PlayerControl(Node):
         }, separators=(",", ":"), sort_keys=True)
         self.ordinal_seek_publisher.publish(message)
 
+    def request_target_ordinal(self, epoch: int, target_ns: int):
+        self._publish_json(self.target_ordinal_publisher, {
+            "schema": "rosbag_target_ordinal/v1", "epoch": epoch,
+            "target_ns": target_ns})
+
+    def restore_ordinal(self, epoch: int, target_ordinal: int):
+        self._publish_json(self.ordinal_restore_publisher, {
+            "schema": "eskf_replay_restore_ordinal/v1", "epoch": epoch,
+            "target_ordinal": target_ordinal})
+
+    def request_snapshot(self, epoch: int, target_ordinal: int):
+        self._publish_json(self.snapshot_publisher, {
+            "schema": "eskf_replay_snapshot_request/v1", "epoch": epoch,
+            "target_ordinal": target_ordinal})
+
+    @staticmethod
+    def _publish_json(publisher, payload):
+        message = String()
+        message.data = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        publisher.publish(message)
+
 
 class ProgressPlayer:
     def __init__(self, root: tk.Tk, initial_bag: str | None, profile_path: str | None,
@@ -266,6 +306,15 @@ class ProgressPlayer:
         self.active_localhost = True
         self.epoch_clock = ReplayEpochClock()
         self.first_pass_complete = False
+        self.first_pass_sealed = False
+        self.determinism_active = False
+        self.determinism_target_ns: int | None = None
+        self.determinism_target_ordinal: int | None = None
+        self.determinism_runs: list[dict] = []
+        self.determinism_snapshots: list[dict] = []
+        self.determinism_retry_count = 0
+        self.sealed_checkpoint_count: int | None = None
+        self.sealed_log_size: int | None = None
 
         self.path_var = tk.StringVar(value="尚未选择 bag")
         self.status_var = tk.StringVar(value="请选择含 metadata.yaml 的 bag 目录")
@@ -353,6 +402,13 @@ class ProgressPlayer:
         self.bag_dir, self.start_ns, self.duration_ns = bag_dir, start_ns, duration_ns
         self.current_ns = start_ns
         self.first_pass_complete = False
+        self.first_pass_sealed = False
+        self.determinism_active = False
+        self.determinism_runs = []
+        self.determinism_snapshots = []
+        self.determinism_retry_count = 0
+        self.sealed_checkpoint_count = None
+        self.sealed_log_size = None
         self.paused = True
         self.path_var.set(str(bag_dir))
         self.status_var.set("正在启动播放器…")
@@ -418,7 +474,9 @@ class ProgressPlayer:
         rclpy.init(args=None, context=self.context, domain_id=domain_id)
         self.node = PlayerControl(
             self.on_clock, self.on_restore_result,
-            self.on_ordinal_seek_result, self.context)
+            self.on_ordinal_seek_result, self.on_target_ordinal_result,
+            self.on_reader_status, self.on_snapshot_result,
+            self.on_seal_result, self.context)
         self.executor = SingleThreadedExecutor(context=self.context)
         self.executor.add_node(self.node)
         self.ros_stop_event = threading.Event()
@@ -433,6 +491,7 @@ class ProgressPlayer:
     def on_clock(self, message: Clock):
         self.current_ns = message.clock.sec * 1_000_000_000 + message.clock.nanosec
         if (self.profile.get("checkpoint_restore") and self.bag_dir and
+                not self.profile.get("ordinal_reader") and
                 not self.paused and self.rebuild_target_ns is None and
                 self.current_ns >= self.start_ns + self.duration_ns - 100_000_000):
             self.node.pause()
@@ -460,7 +519,8 @@ class ProgressPlayer:
                     f"已暂停，可拖动进度条（{active}）" if ready and self.paused
                     else (f"正在播放（{active}）" if ready else f"正在等待播放器服务（{active}）…"))
 
-        if self.rebuild_target_ns is not None and self.current_ns >= self.rebuild_target_ns:
+        if (not self.determinism_active and self.rebuild_target_ns is not None and
+                self.current_ns >= self.rebuild_target_ns):
             self.finish_rebuild()
 
         if self.bag_dir:
@@ -534,6 +594,18 @@ class ProgressPlayer:
         """Restart managed state and replay every recorded input up to target."""
         if self.node is None or not self.node.ready() or self.rebuild_target_ns is not None:
             return
+        if self.profile.get("ordinal_reader"):
+            if not self.first_pass_sealed:
+                self.status_var.set("需先完整播放并确认 checkpoint/过程日志已封存")
+                return
+            self.determinism_active = True
+            self.determinism_target_ns = target_ns
+            self.determinism_target_ordinal = None
+            self.determinism_runs = []
+            self.determinism_snapshots = []
+            self.rebuild_target_ns = target_ns
+            self.start_determinism_epoch()
+            return
         epoch = self.epoch_clock.next(target_ns, self.first_pass_complete)
         self.node.announce_visual_seek(
             target_ns / 1e9, epoch.epoch, epoch.first_pass_complete)
@@ -557,6 +629,50 @@ class ProgressPlayer:
         future = self.node.seek(self.start_ns)
         self.rebuild_target_ns = target_ns
         future.add_done_callback(lambda result: self.root.after(0, self.begin_rebuild, result))
+
+    def start_determinism_epoch(self):
+        if self.node is None or self.determinism_target_ns is None:
+            return
+        epoch = self.epoch_clock.next(self.determinism_target_ns, True)
+        self.determinism_retry_count = 0
+        self.node.pause()
+        self.paused = True
+        self.node.announce_visual_seek(
+            self.determinism_target_ns / 1e9, epoch.epoch, True)
+        self.status_var.set(
+            f"bit-exact 恢复 {len(self.determinism_runs) + 1}/3：解析目标序号…")
+        self.root.after(100, lambda: self.node and self.node.request_target_ordinal(
+            epoch.epoch, self.determinism_target_ns))
+
+    def on_target_ordinal_result(self, message: String):
+        self.root.after(0, self.handle_target_ordinal_result, message.data)
+
+    def handle_target_ordinal_result(self, payload: str):
+        if not self.determinism_active or self.node is None:
+            return
+        try:
+            result = json.loads(payload)
+            if result.get("schema") != "rosbag_target_ordinal_result/v1":
+                return
+            if (result.get("reason") == "wrong_epoch" and
+                    int(result.get("requested_epoch", -1)) == self.epoch_clock.current and
+                    self.determinism_retry_count < 20):
+                self.determinism_retry_count += 1
+                self.root.after(100, lambda: self.node and
+                                self.node.request_target_ordinal(
+                                    self.epoch_clock.current,
+                                    self.determinism_target_ns))
+                return
+            if int(result.get("epoch", -1)) != self.epoch_clock.current:
+                return
+            if not result.get("success"):
+                raise RuntimeError(result.get("reason", "target ordinal rejected"))
+            self.determinism_target_ordinal = int(result["target_ordinal"])
+            self.checkpoint_restore_pending_ns = self.determinism_target_ns
+            self.node.restore_ordinal(
+                self.epoch_clock.current, self.determinism_target_ordinal)
+        except Exception as exc:
+            self.fail_determinism(f"目标序号失败：{exc}")
 
     def begin_rebuild(self, future):
         try:
@@ -585,6 +701,16 @@ class ProgressPlayer:
         try:
             result = json.loads(payload)
             if not result.get("success"):
+                if (self.determinism_active and
+                        result.get("reason") == "unavailable" and
+                        self.determinism_retry_count < 20):
+                    self.determinism_retry_count += 1
+                    self.checkpoint_restore_pending_ns = target_ns
+                    self.root.after(100, lambda: self.node and
+                                    self.node.restore_ordinal(
+                                        self.epoch_clock.current,
+                                        self.determinism_target_ordinal))
+                    return
                 raise RuntimeError(result.get("reason", "checkpoint restore rejected"))
             checkpoint_ns = int(round(float(result["checkpoint_stamp_s"]) * 1e9))
             self.current_ns = checkpoint_ns
@@ -593,15 +719,24 @@ class ProgressPlayer:
             if self.profile.get("ordinal_reader"):
                 if checkpoint_ordinal is None:
                     raise RuntimeError("checkpoint 没有 bag ordinal")
-                self.node.seek_ordinal(
-                    self.epoch_clock.current, int(checkpoint_ordinal) + 1)
+                checkpoint_ordinal = int(checkpoint_ordinal)
+                if (self.determinism_active and
+                        checkpoint_ordinal >= self.determinism_target_ordinal):
+                    self.node.request_snapshot(
+                        self.epoch_clock.current, self.determinism_target_ordinal)
+                else:
+                    self.node.seek_ordinal(
+                        self.epoch_clock.current, checkpoint_ordinal + 1)
                 return
             future = self.node.seek(checkpoint_ns + 1)
             future.add_done_callback(
                 lambda completed: self.root.after(
                     0, self.begin_checkpoint_forward_replay, completed))
         except Exception as exc:
-            self.status_var.set(f"Checkpoint 恢复失败：{exc}")
+            if self.determinism_active:
+                self.fail_determinism(f"Checkpoint 恢复失败：{exc}")
+            else:
+                self.status_var.set(f"Checkpoint 恢复失败：{exc}")
 
     def on_ordinal_seek_result(self, message: String):
         self.root.after(0, self.handle_ordinal_seek_result, message.data)
@@ -619,8 +754,125 @@ class ProgressPlayer:
                 raise RuntimeError(result.get("reason", "ordinal seek rejected"))
             self.begin_checkpoint_forward_replay(None)
         except Exception as exc:
+            if self.determinism_active:
+                self.fail_determinism(f"Ordinal 补算定位失败：{exc}")
+            else:
+                self.rebuild_target_ns = None
+                self.status_var.set(f"Ordinal 补算定位失败：{exc}")
+
+    def on_reader_status(self, message: String):
+        self.root.after(0, self.handle_reader_status, message.data)
+
+    def handle_reader_status(self, payload: str):
+        if self.node is None:
+            return
+        try:
+            result = json.loads(payload)
+            if result.get("schema") != "rosbag_ordinal_reader_status/v1":
+                return
+            if result.get("state") == "end_of_bag":
+                if not self.first_pass_complete:
+                    self.first_pass_complete = True
+                    self.paused = True
+                    self.node.seal_first_pass(self.current_ns)
+                return
+            if (not self.determinism_active or
+                    int(result.get("epoch", -1)) != self.epoch_clock.current):
+                return
+            if result.get("state") != "target_reached":
+                raise RuntimeError(result.get("state", "reader failed"))
+            if int(result["bag_ordinal"]) != self.determinism_target_ordinal:
+                raise RuntimeError("reader stopped at a different ordinal")
+            self.paused = True
+            self.node.request_snapshot(
+                self.epoch_clock.current, self.determinism_target_ordinal)
+        except Exception as exc:
+            self.fail_determinism(f"顺序注入失败：{exc}")
+
+    def on_snapshot_result(self, message: String):
+        self.root.after(0, self.handle_snapshot_result, message.data)
+
+    def handle_snapshot_result(self, payload: str):
+        if not self.determinism_active:
+            return
+        try:
+            snapshot = json.loads(payload)
+            if (snapshot.get("schema") != "eskf_replay_snapshot/v1" or
+                    int(snapshot.get("epoch", -1)) != self.epoch_clock.current):
+                return
+            if not snapshot.get("success"):
+                raise RuntimeError(snapshot.get("reason", "snapshot rejected"))
+            self.determinism_runs.append({
+                "epoch": self.epoch_clock.current, **snapshot_hashes(snapshot)})
+            self.determinism_snapshots.append(snapshot)
+            if len(self.determinism_runs) < 3:
+                self.start_determinism_epoch()
+                return
+            comparison = compare_three(self.determinism_runs)
+            final_log_size = self.active_process_log_size()
+            checkpoint_counts = [int(snapshot["node_state_summary"][
+                "full_replay_checkpoints"]) for snapshot in self.determinism_snapshots]
+            immutable = (self.sealed_checkpoint_count is not None and
+                         all(count == self.sealed_checkpoint_count
+                             for count in checkpoint_counts) and
+                         self.sealed_log_size is not None and
+                         final_log_size == self.sealed_log_size)
+            comparison["bit_exact"] = comparison["bit_exact"] and immutable
+            report = {"schema": "eskf_bit_exact_report/v1",
+                      "bag": str(self.bag_dir),
+                      "target_ns": self.determinism_target_ns,
+                      "target_ordinal": self.determinism_target_ordinal,
+                      "runs": self.determinism_runs,
+                      "sealed_checkpoint_count": self.sealed_checkpoint_count,
+                      "checkpoint_counts_after_runs": checkpoint_counts,
+                      "sealed_log_size": self.sealed_log_size,
+                      "final_log_size": final_log_size,
+                      "first_pass_storage_immutable": immutable,
+                      "first_differences": first_differences(
+                          self.determinism_snapshots), **comparison}
+            report_dir = Path(__file__).resolve().parent / "determinism_reports"
+            report_dir.mkdir(exist_ok=True)
+            report_path = report_dir / (
+                f"target_{self.determinism_target_ns}_{int(time.time())}.json")
+            report_path.write_text(json.dumps(report, indent=2, sort_keys=True),
+                                   encoding="utf-8")
+            self.determinism_active = False
             self.rebuild_target_ns = None
-            self.status_var.set(f"Ordinal 补算定位失败：{exc}")
+            self.status_var.set(
+                ("bit-exact 通过" if comparison["bit_exact"] else "bit-exact 失败") +
+                f"：三次状态/协方差/轨迹哈希，报告 {report_path}")
+        except Exception as exc:
+            self.fail_determinism(f"快照比较失败：{exc}")
+
+    def on_seal_result(self, message: String):
+        self.root.after(0, self.handle_seal_result, message.data)
+
+    def handle_seal_result(self, payload: str):
+        try:
+            result = json.loads(payload)
+            if (result.get("schema") == "eskf_replay_seal_result/v1" and
+                    result.get("success") and result.get("checkpoint_frozen") and
+                    result.get("log_sealed")):
+                self.first_pass_sealed = True
+                self.sealed_checkpoint_count = int(result["checkpoint_count"])
+                self.sealed_log_size = self.active_process_log_size()
+                self.status_var.set("首次播放已完成：过程日志和 checkpoint 已封存")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return
+
+    def fail_determinism(self, detail: str):
+        self.determinism_active = False
+        self.rebuild_target_ns = None
+        self.checkpoint_restore_pending_ns = None
+        self.paused = True
+        self.status_var.set(detail)
+
+    def active_process_log_size(self):
+        runs = Path(__file__).resolve().parent / "progress_player" / "runs"
+        candidates = sorted(
+            runs.glob(f"*-domain{self.active_domain_id}-*/eskf_process.jsonl"),
+            key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        return candidates[0].stat().st_size if candidates else None
 
     def begin_checkpoint_forward_replay(self, future):
         try:

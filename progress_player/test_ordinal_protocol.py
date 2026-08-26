@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import unittest
 
-from ordinal_protocol import BagRecord, HEADER, ordinal_at_or_after, pack_ingress, unpack_header
+from ordinal_protocol import (BagRecord, HEADER, ordinal_at_or_after,
+                              ordinal_at_or_before, pack_ingress,
+                              unpack_header)
 
 
 class OrdinalProtocolTest(unittest.TestCase):
@@ -21,6 +23,7 @@ class OrdinalProtocolTest(unittest.TestCase):
         self.assertEqual(ordinal_at_or_after(records, 10), 0)
         self.assertEqual([r.ordinal for r in records[:2]], [0, 1])
         self.assertEqual(ordinal_at_or_after(records, 11), 2)
+        self.assertEqual(ordinal_at_or_before(records, 10), 1)
 
     def test_non_ingress_topic_is_rejected(self):
         with self.assertRaises(ValueError):

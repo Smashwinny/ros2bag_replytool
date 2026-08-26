@@ -48,3 +48,8 @@ def unpack_header(frame: bytes):
 def ordinal_at_or_after(records: list[BagRecord], timestamp_ns: int) -> int:
     timestamps = [record.timestamp_ns for record in records]
     return bisect.bisect_left(timestamps, timestamp_ns)
+
+
+def ordinal_at_or_before(records: list[BagRecord], timestamp_ns: int) -> int:
+    timestamps = [record.timestamp_ns for record in records]
+    return bisect.bisect_right(timestamps, timestamp_ns) - 1

@@ -19,7 +19,8 @@ from rosgraph_msgs.msg import Clock
 from rosidl_runtime_py.utilities import get_message
 from std_msgs.msg import String, UInt8MultiArray
 
-from ordinal_protocol import BagRecord, TOPIC_IDS, ordinal_at_or_after, pack_ingress
+from ordinal_protocol import (BagRecord, TOPIC_IDS, ordinal_at_or_after,
+                              ordinal_at_or_before, pack_ingress)
 
 
 def load_records(bag_dir: Path):
@@ -57,6 +58,8 @@ class OrdinalReplayReader(Node):
         self.rate = 1.0
         self.pending_ack = None
         self.pending_deadline = 0.0
+        self.stop_after_ordinal = None
+        self.first_eof_announced = False
         self.last_timestamp_ns = None
         self.last_wall = None
         self.stopping = False
@@ -73,6 +76,8 @@ class OrdinalReplayReader(Node):
             String, "/rosbag_progress/ordinal_reader_status", 10)
         self.ordinal_seek_result_pub = self.create_publisher(
             String, "/rosbag_progress/ordinal_seek_result", 10)
+        self.target_ordinal_result_pub = self.create_publisher(
+            String, "/rosbag_progress/target_ordinal_result", 10)
         self.display_publishers = {}
         self.display_types = {}
         for source, target in (("/fusion_location", "/legacy/fusion_location"),
@@ -91,6 +96,9 @@ class OrdinalReplayReader(Node):
         self.create_subscription(
             String, "/rosbag_progress/ordinal_seek_request",
             self.on_ordinal_seek, 10)
+        self.create_subscription(
+            String, "/rosbag_progress/target_ordinal_request",
+            self.on_target_ordinal, 10)
         self.create_subscription(
             String, "/eskf/replay_ingress_ack", self.on_ack,
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE))
@@ -149,6 +157,7 @@ class OrdinalReplayReader(Node):
             if epoch <= self.epoch:
                 return
             self.epoch = epoch
+            self.stop_after_ordinal = None
             self.cancel_pending_locked()
             self.reset_timing_locked()
             self.condition.notify_all()
@@ -184,6 +193,40 @@ class OrdinalReplayReader(Node):
         }, separators=(",", ":"), sort_keys=True)
         self.ordinal_seek_result_pub.publish(result)
 
+    def on_target_ordinal(self, message):
+        success = False
+        reason = "invalid_request"
+        target_ordinal = -1
+        requested_epoch = -1
+        try:
+            payload = json.loads(message.data)
+            if payload.get("schema") != "rosbag_target_ordinal/v1":
+                raise ValueError("schema")
+            epoch = int(payload["epoch"])
+            requested_epoch = epoch
+            target_ns = int(payload["target_ns"])
+            with self.condition:
+                if epoch != self.epoch:
+                    reason = "wrong_epoch"
+                else:
+                    target_ordinal = ordinal_at_or_before(
+                        self.records, target_ns)
+                    if target_ordinal >= 0:
+                        self.stop_after_ordinal = target_ordinal
+                        success, reason = True, "ok"
+                    else:
+                        reason = "before_bag_start"
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            epoch = self.epoch
+        result = String()
+        result.data = json.dumps({
+            "schema": "rosbag_target_ordinal_result/v1",
+            "epoch": self.epoch, "requested_epoch": requested_epoch,
+            "target_ordinal": target_ordinal,
+            "success": success, "reason": reason,
+        }, separators=(",", ":"), sort_keys=True)
+        self.target_ordinal_result_pub.publish(result)
+
     def on_ack(self, message):
         try:
             payload = json.loads(message.data)
@@ -197,6 +240,15 @@ class OrdinalReplayReader(Node):
             if accepted:
                 self.cursor += 1
                 self.pending_ack = None
+                if (self.stop_after_ordinal is not None and
+                        key[1] >= self.stop_after_ordinal):
+                    self.paused = True
+                    self.publish_status("target_reached", key[1])
+                elif (self.cursor >= len(self.records) and
+                      not self.first_eof_announced):
+                    self.first_eof_announced = True
+                    self.paused = True
+                    self.publish_status("end_of_bag", key[1])
                 self.condition.notify_all()
             else:
                 self.paused = True
@@ -271,6 +323,16 @@ class OrdinalReplayReader(Node):
                 with self.condition:
                     if self.cursor == record.ordinal:
                         self.cursor += 1
+                        if (self.stop_after_ordinal is not None and
+                                record.ordinal >= self.stop_after_ordinal):
+                            self.paused = True
+                            self.publish_status(
+                                "target_reached", record.ordinal)
+                        elif (self.cursor >= len(self.records) and
+                              not self.first_eof_announced):
+                            self.first_eof_announced = True
+                            self.paused = True
+                            self.publish_status("end_of_bag", record.ordinal)
 
     def destroy_node(self):
         with self.condition:
@@ -293,7 +355,8 @@ def main():
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

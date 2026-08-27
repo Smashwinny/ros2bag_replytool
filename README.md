@@ -99,6 +99,16 @@ bash -n progress_player/launch_eskf_multi_replay.sh
 
 当前 ESKF 检查点功能位于 `feature/eskf-replay-checkpoint` 分支。
 
+多包启动器会先运行 `progress_player/ensure_eskf_replay_build.sh`。守卫对 ESKF
+源码、CMake、Production 参数、运行参数生成脚本、标定文件、RViz 插件源码以及最终
+安装产物计算 SHA-256。输入和产物均未变化时直接复用已有编译；任一内容变化、产物
+缺失或状态文件损坏时才重新执行 `prepare_eskf_compare.sh`。本地状态保存在
+`progress_player/build_state/`，不提交到 Git。
+
+这里的“复用编译”不等于跨进程恢复 checkpoint：`FullReplayCheckpoint` 当前保存在
+ESKF 进程内存中。关闭整套回放后重新启动，仍需先完整播放才能建立本进程的精确状态；
+工具不会仅凭二进制未变化就把旧内存状态标记为可恢复。
+
 该专项 profile 默认使用 `progress_player/ordinal_replay_reader.py`，不再调用
 `ros2 bag play` 给 ESKF 注入数据。reader 首次顺序读取 storage，给每条原始 bag 记录
 分配全局 `bag_ordinal`；IMU、GPS、Odom、Cmd 通过单一

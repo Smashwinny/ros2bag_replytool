@@ -63,6 +63,11 @@ if [[ -z "${DISPLAY:-}" ]]; then
   exit 2
 fi
 
+# Rebuild the replay-only ESKF overlay only when its content-addressed inputs
+# or installed artifacts changed. This check does not claim that an in-memory
+# replay checkpoint survives process shutdown.
+bash /home/hulk/ros2bag/progress_player/ensure_eskf_replay_build.sh
+
 set +u
 source /home/hulk/mow_mow_agent/mowmow/docs/eskf_fusion/debug/eskf_compare_env.sh
 set -u

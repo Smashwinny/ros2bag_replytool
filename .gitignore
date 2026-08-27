@@ -8,5 +8,6 @@
 !progress_player/
 !progress_player/**
 progress_player/runs/
+progress_player/build_state/
 progress_player/__pycache__/
 /tmp/

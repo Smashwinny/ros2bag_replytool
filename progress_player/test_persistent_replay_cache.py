@@ -7,11 +7,40 @@ import unittest
 
 from persistent_replay_cache import (
     cache_fingerprint, create_database, index_process_log, insert_trajectory,
-    load_valid_manifest, nearest_process_record, reset_build_database,
-    write_manifest)
+    load_valid_manifest, nearest_process_record, remove_cache_directories,
+    reset_build_database, stale_build_cache_directories, write_manifest)
 
 
 class PersistentReplayCacheTest(unittest.TestCase):
+    def test_finds_and_safely_removes_cache_from_previous_build(self):
+        with tempfile.TemporaryDirectory(
+                dir=Path(__file__).parents[1] / "tmp") as directory:
+            root = Path(directory)
+            bag, cache = root / "bag", root / "cache"
+            bag.mkdir()
+            (bag / "metadata.yaml").write_text("metadata", encoding="utf-8")
+            (bag / "data.db3").write_bytes(b"bag")
+            target = root / "target.yaml"
+            target.write_text("target", encoding="utf-8")
+            old_build = root / "old.json"
+            old_build.write_text('{"artifact_sha256":"old"}', encoding="utf-8")
+            process = root / "process.jsonl"
+            process.write_text("{}\n", encoding="utf-8")
+            fingerprint, identity = cache_fingerprint(
+                bag, target, old_build)
+            cache_dir = cache / fingerprint
+            cache_dir.mkdir(parents=True)
+            create_database(cache_dir / "index.sqlite3").close()
+            write_manifest(cache_dir, fingerprint, identity, process, {})
+
+            stale = stale_build_cache_directories(
+                cache, bag, target, {"artifact_sha256": "new"})
+            self.assertEqual(stale, [cache_dir])
+            self.assertEqual(remove_cache_directories(cache, stale), 1)
+            self.assertFalse(cache_dir.exists())
+            with self.assertRaisesRegex(ValueError, "unsafe"):
+                remove_cache_directories(cache, [root])
+
     def test_reset_build_database_removes_sqlite_sidecars(self):
         with tempfile.TemporaryDirectory(
                 dir=Path(__file__).parents[1] / "tmp") as directory:

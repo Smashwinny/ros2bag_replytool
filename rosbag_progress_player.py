@@ -23,7 +23,8 @@ from progress_player.determinism import (
     FULL_CHECKPOINT_FIELD_COUNT, compare_three, first_differences,
     snapshot_hashes)
 from progress_player.persistent_replay_cache import (
-    cache_fingerprint, load_valid_manifest)
+    cache_fingerprint, load_valid_manifest, remove_cache_directories,
+    stale_build_cache_directories)
 
 import rclpy
 from rclpy.node import Node
@@ -421,12 +422,39 @@ class ProgressPlayer:
                        "build_state" / "eskf_compare.json")
         if target_yaml is not None and build_state.is_file():
             try:
-                fingerprint, _ = cache_fingerprint(
+                fingerprint, identity = cache_fingerprint(
                     bag_dir, Path(target_yaml), build_state)
                 self.cache_fingerprint = fingerprint
-                self.cache_manifest = load_valid_manifest(
-                    Path(__file__).resolve().parent / "progress_player" / "cache",
-                    fingerprint)
+                cache_root = (Path(__file__).resolve().parent /
+                              "progress_player" / "cache")
+                self.cache_manifest = load_valid_manifest(cache_root, fingerprint)
+                stale_caches = stale_build_cache_directories(
+                    cache_root, bag_dir, Path(target_yaml),
+                    identity["build_state"])
+                if self.cache_manifest is None and stale_caches:
+                    should_rebuild = messagebox.askyesno(
+                        "编译产物已变化",
+                        f"检测到当前编译产物与该数据包的旧缓存不一致。\n\n"
+                        f"旧缓存数量：{len(stale_caches)}\n"
+                        "旧缓存不能代表当前代码结果，需要清理缓存并重新完整播放一次。\n"
+                        "这里只删除缓存索引，不删除首次过程日志。\n\n"
+                        "是否立即清理旧缓存并开始重新运行？",
+                        parent=self.root)
+                    if not should_rebuild:
+                        self.path_var.set(str(bag_dir))
+                        self.status_var.set(
+                            "已保留旧缓存；未启动。清理后需重新完整播放一次")
+                        return
+                    try:
+                        remove_cache_directories(cache_root, stale_caches)
+                    except (OSError, ValueError) as exc:
+                        messagebox.showerror(
+                            "旧缓存清理失败",
+                            f"未启动回放，请先处理缓存目录：\n{exc}",
+                            parent=self.root)
+                        self.path_var.set(str(bag_dir))
+                        self.status_var.set("旧缓存清理失败；未启动")
+                        return
             except (OSError, ValueError, KeyError, json.JSONDecodeError):
                 self.cache_manifest = None
         if self.cache_manifest is not None:

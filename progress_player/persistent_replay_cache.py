@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 from typing import Iterable
 
@@ -18,6 +19,48 @@ def reset_build_database(path: Path) -> None:
     """Remove an interrupted SQLite build and its journal sidecars."""
     for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
         candidate.unlink(missing_ok=True)
+
+
+def stale_build_cache_directories(cache_root: Path, bag_dir: Path,
+                                  target_yaml: Path,
+                                  current_build_state: dict) -> list[Path]:
+    """Find complete caches for the same inputs but an older replay build."""
+    bag_path = str(bag_dir.resolve())
+    target_path = str(target_yaml.resolve())
+    stale = []
+    if not cache_root.is_dir():
+        return stale
+    for manifest_path in cache_root.glob("*/manifest.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            identity = manifest["identity"]
+            same_inputs = (
+                identity["bag"]["path"] == bag_path and
+                identity["target_yaml"]["path"] == target_path)
+            old_build = identity["build_state"] != current_build_state
+        except (OSError, KeyError, TypeError, json.JSONDecodeError):
+            continue
+        if (manifest.get("schema") == SCHEMA and manifest.get("complete") and
+                same_inputs and old_build):
+            stale.append(manifest_path.parent)
+    return sorted(stale)
+
+
+def remove_cache_directories(cache_root: Path,
+                             directories: Iterable[Path]) -> int:
+    """Remove only direct, content-addressed children of the cache root."""
+    root = cache_root.resolve()
+    removed = 0
+    for directory in directories:
+        candidate = directory.resolve()
+        if (candidate.parent != root or len(candidate.name) != 64 or
+                any(character not in "0123456789abcdef"
+                    for character in candidate.name)):
+            raise ValueError(f"unsafe cache directory: {candidate}")
+        if candidate.is_dir():
+            shutil.rmtree(candidate)
+            removed += 1
+    return removed
 
 
 def _sha256_file(path: Path) -> str:

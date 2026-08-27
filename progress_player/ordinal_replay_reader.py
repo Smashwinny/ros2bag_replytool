@@ -49,9 +49,10 @@ def load_records(bag_dir: Path):
 
 
 class OrdinalReplayReader(Node):
-    def __init__(self, records, topic_types):
+    def __init__(self, records, topic_types, display_only=False):
         super().__init__("rosbag2_player")
         self.records = records
+        self.display_only = display_only
         self.topic_types = topic_types
         self.cursor = 0
         self.epoch = 0
@@ -81,8 +82,10 @@ class OrdinalReplayReader(Node):
             String, "/rosbag_progress/target_ordinal_result", 10)
         self.display_publishers = {}
         self.display_types = {}
-        for source, target in (("/fusion_location", "/legacy/fusion_location"),
-                               ("/motor_speed", "/motor_speed")):
+        display_topics = (() if self.display_only else
+                          (("/fusion_location", "/legacy/fusion_location"),
+                           ("/motor_speed", "/motor_speed")))
+        for source, target in display_topics:
             if source in topic_types:
                 message_type = get_message(topic_types[source])
                 self.display_types[source] = message_type
@@ -310,7 +313,7 @@ class OrdinalReplayReader(Node):
             if not self.wait_pacing(record.timestamp_ns):
                 continue
             self.publish_clock(record.timestamp_ns)
-            if record.topic in TOPIC_IDS:
+            if record.topic in TOPIC_IDS and not self.display_only:
                 frame = UInt8MultiArray()
                 frame.data = pack_ingress(epoch, record)
                 with self.condition:
@@ -349,10 +352,11 @@ class OrdinalReplayReader(Node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("bag", type=Path)
+    parser.add_argument("--display-only", action="store_true")
     args = parser.parse_args()
     records, topic_types = load_records(args.bag.resolve())
     rclpy.init()
-    node = OrdinalReplayReader(records, topic_types)
+    node = OrdinalReplayReader(records, topic_types, args.display_only)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

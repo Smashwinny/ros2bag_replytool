@@ -113,6 +113,24 @@ class StorageControlTest(unittest.TestCase):
             self.assertTrue(other_log.exists())
             self.assertFalse(old_log.parent.exists())
 
+    def test_clean_preserves_run_referenced_by_persistent_cache(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parents[1] / "tmp") as directory:
+            base = Path(directory)
+            root, cache = base / "runs", base / "cache" / "fingerprint"
+            active = root / "active" / "eskf_process.jsonl"
+            cached = root / "cached" / "eskf_process.jsonl"
+            old = root / "old" / "eskf_process.jsonl"
+            for path in (active, cached, old):
+                path.parent.mkdir(parents=True)
+                path.write_bytes(b"data")
+            cache.mkdir(parents=True)
+            (cache / "manifest.json").write_text(
+                json.dumps({"process_log": str(cached)}), encoding="utf-8")
+            MODULE.clean_completed_runs(root, active, base / "cache")
+            self.assertTrue(active.exists())
+            self.assertTrue(cached.exists())
+            self.assertFalse(old.parent.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

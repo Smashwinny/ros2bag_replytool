@@ -44,8 +44,9 @@ def directory_size(path: Path) -> int:
     return total
 
 
-def clean_completed_runs(runs_dir: Path, active_log: Path) -> tuple[int, int]:
-    """Remove direct run children except the active log's run directory."""
+def clean_completed_runs(runs_dir: Path, active_log: Path,
+                         cache_root: Path | None = None) -> tuple[int, int]:
+    """Remove unreferenced completed runs while preserving active/cache data."""
     root = runs_dir.resolve(strict=True)
     if not root.is_dir() or root == Path(root.anchor):
         raise ValueError("unsafe runs directory")
@@ -55,9 +56,21 @@ def clean_completed_runs(runs_dir: Path, active_log: Path) -> tuple[int, int]:
     except ValueError as error:
         raise ValueError("active log is outside runs directory") from error
     active_run = active.parent
+    protected_runs = {active_run}
+    cache_root = cache_root or root.parent / "cache"
+    if cache_root.is_dir():
+        for manifest_path in cache_root.glob("*/manifest.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                cached_log = Path(manifest["process_log"]).resolve(strict=False)
+                cached_log.relative_to(root)
+                protected_runs.add(cached_log.parent)
+            except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                continue
     removed, failures = 0, 0
     for child in root.iterdir():
-        if child.resolve(strict=False) == active_run or (child / ".active").exists():
+        if (child.resolve(strict=False) in protected_runs or
+                (child / ".active").exists()):
             continue
         try:
             before = directory_size(child) if child.is_dir() else child.stat().st_size
@@ -340,4 +353,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

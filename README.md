@@ -109,6 +109,26 @@ bash -n progress_player/launch_eskf_multi_replay.sh
 ESKF 进程内存中。关闭整套回放后重新启动，仍需先完整播放才能建立本进程的精确状态；
 工具不会仅凭二进制未变化就把旧内存状态标记为可恢复。
 
+### 首次结果持久化与纯回放
+
+专项模式首次完整播放并收到 ESKF 的日志/checkpoint 封存 ACK 后，会在后台生成
+`progress_player/cache/<fingerprint>/`：
+
+- `manifest.json`：绑定 rosbag 内容 SHA-256、target YAML、ESKF 构建指纹和封存日志；
+- `index.sqlite3`：保存首次旧算法/ESKF/临时 ESKF 轨迹，以及每条过程日志记录的
+  bag 时间、原文件字节偏移、长度、事件和序号；
+- 原始 `progress_player/runs/.../eskf_process.jsonl`：继续保存全部过程量，SQLite
+  只做索引，不把完整矩阵、队列、协方差或 computation trace 改写成摘要。
+
+下一次打开相同 bag 时，只有清单完整且 bag、地图、构建产物和原始日志身份全部匹配，
+界面才显示“只读缓存回放”。此模式使用 `ordinal_replay_reader.py --display-only` 推进
+`/clock`，不启动 ESKF、不创建新的过程日志；拖动进度条直接裁剪首次完整历史轨迹，
+浮动过程量窗口按时间索引读取原始 JSON。点击“查看当前时刻全部过程量”可查看该条
+未删减记录。任一指纹变化或缓存文件缺失都会 fail closed，重新进入首次计算模式。
+
+日志清理会保留所有被有效缓存清单引用的 run；要删除这类大日志，需要先删除对应缓存
+目录，再从日志浮窗执行清理。
+
 该专项 profile 默认使用 `progress_player/ordinal_replay_reader.py`，不再调用
 `ros2 bag play` 给 ESKF 注入数据。reader 首次顺序读取 storage，给每条原始 bag 记录
 分配全局 `bag_ordinal`；IMU、GPS、Odom、Cmd 通过单一

@@ -48,6 +48,10 @@ bash docs/eskf_fusion/debug/prepare_eskf_compare.sh
 `prepare_eskf_compare.sh` 会生成 production-equivalent 回放参数，并编译安装 ESKF 与
 debug RViz 插件。缺少两个自定义消息 install 时脚本会 fail closed，不会用不完整环境继续。
 
+多包启动器会自动用内容指纹复用未变化的编译产物。首次完整播放结束后需等待进度窗口
+显示正在建立/已建立持久化缓存；关闭并再次启动相同 bag 后，状态栏应显示“只读缓存
+回放”，此时拖动进度条不会启动 ESKF 或增加 `eskf_process.jsonl`。
+
 ## 3. 默认数据清单
 
 将三份 bag 放到下列精确路径。使用 `sha256sum` 核对每个文件：
@@ -100,4 +104,3 @@ python3 -m py_compile rosbag_progress_player.py
 验收边界：Git 不包含 bag 本体、构建目录和运行日志；复现者必须取得上面校验值一致的
 原始 bag。检查点是进程内状态，退出回放后保留的是完整 JSONL 过程证据，不是可跨进程
 加载的磁盘检查点。
-

@@ -22,6 +22,8 @@ from progress_player.replay_history import ReplayEpochClock
 from progress_player.determinism import (
     FULL_CHECKPOINT_FIELD_COUNT, compare_three, first_differences,
     snapshot_hashes)
+from progress_player.persistent_replay_cache import (
+    cache_fingerprint, load_valid_manifest)
 
 import rclpy
 from rclpy.node import Node
@@ -316,6 +318,9 @@ class ProgressPlayer:
         self.determinism_retry_count = 0
         self.sealed_checkpoint_count: int | None = None
         self.sealed_log_size: int | None = None
+        self.cache_manifest: dict | None = None
+        self.cache_fingerprint: str | None = None
+        self.cache_builder: subprocess.Popen | None = None
 
         self.path_var = tk.StringVar(value="尚未选择 bag")
         self.status_var = tk.StringVar(value="请选择含 metadata.yaml 的 bag 目录")
@@ -410,6 +415,23 @@ class ProgressPlayer:
         self.determinism_retry_count = 0
         self.sealed_checkpoint_count = None
         self.sealed_log_size = None
+        self.cache_manifest = None
+        self.cache_fingerprint = None
+        build_state = (Path(__file__).resolve().parent / "progress_player" /
+                       "build_state" / "eskf_compare.json")
+        if target_yaml is not None and build_state.is_file():
+            try:
+                fingerprint, _ = cache_fingerprint(
+                    bag_dir, Path(target_yaml), build_state)
+                self.cache_fingerprint = fingerprint
+                self.cache_manifest = load_valid_manifest(
+                    Path(__file__).resolve().parent / "progress_player" / "cache",
+                    fingerprint)
+            except (OSError, ValueError, KeyError, json.JSONDecodeError):
+                self.cache_manifest = None
+        if self.cache_manifest is not None:
+            self.first_pass_complete = True
+            self.first_pass_sealed = True
         self.paused = True
         self.path_var.set(str(bag_dir))
         self.status_var.set("正在启动播放器…")
@@ -422,6 +444,9 @@ class ProgressPlayer:
         env["ESKF_COMPARE_BAG"] = str(bag_dir)
         if target_yaml is not None:
             env["ESKF_COMPARE_TARGET_YAML"] = target_yaml
+        if self.cache_manifest is not None:
+            env["ESKF_REPLAY_CACHE_DATABASE"] = self.cache_manifest["database_path"]
+            env["ESKF_REPLAY_CACHE_PROCESS_LOG"] = self.cache_manifest["process_log"]
         self.active_domain_id = domain_id
         self.active_localhost = self.localhost_var.get()
         # ROS_LOCALHOST_ONLY is consumed by the RMW implementation when this
@@ -440,6 +465,8 @@ class ProgressPlayer:
                     "ordinal_replay_reader.py"),
                 str(bag_dir),
             ]
+            if self.cache_manifest is not None:
+                command.append("--display-only")
         else:
             command = [
                 "ros2", "bag", "play", str(bag_dir), "--clock", "30",
@@ -515,6 +542,9 @@ class ProgressPlayer:
             if self.rebuild_target_ns is not None:
                 target_s = (self.rebuild_target_ns - self.start_ns) / 1e9
                 self.status_var.set(f"正在从起点重建状态 → {format_time(target_s)}（{active}）")
+            elif self.cache_manifest is not None:
+                self.status_var.set(
+                    f"只读缓存回放：可直接拖动，不启动 ESKF（{active}）")
             else:
                 self.status_var.set(
                     f"已暂停，可拖动进度条（{active}）" if ready and self.paused
@@ -594,6 +624,17 @@ class ProgressPlayer:
     def rebuild_to(self, target_ns: int):
         """Restart managed state and replay every recorded input up to target."""
         if self.node is None or not self.node.ready() or self.rebuild_target_ns is not None:
+            return
+        if self.cache_manifest is not None:
+            epoch = self.epoch_clock.next(target_ns, True)
+            self.node.pause()
+            self.paused = True
+            self.current_ns = target_ns
+            self.node.announce_visual_seek(target_ns / 1e9, epoch.epoch, True)
+            future = self.node.seek(target_ns)
+            future.add_done_callback(
+                lambda result: self.root.after(0, self.seek_done, result))
+            self.play_button.configure(text="▶ 播放")
             return
         if self.profile.get("ordinal_reader"):
             if not self.first_pass_sealed:
@@ -772,9 +813,10 @@ class ProgressPlayer:
             if result.get("schema") != "rosbag_ordinal_reader_status/v1":
                 return
             if result.get("state") == "end_of_bag":
+                self.paused = True
+                self.play_button.configure(text="▶ 播放")
                 if not self.first_pass_complete:
                     self.first_pass_complete = True
-                    self.paused = True
                     self.node.seal_first_pass(self.current_ns)
                 return
             if (not self.determinism_active or
@@ -863,6 +905,7 @@ class ProgressPlayer:
                 self.sealed_checkpoint_count = int(result["checkpoint_count"])
                 self.sealed_log_size = self.active_process_log_size()
                 self.status_var.set("首次播放已完成：过程日志和 checkpoint 已封存")
+                self.start_cache_builder()
         except (TypeError, ValueError, json.JSONDecodeError):
             return
 
@@ -874,11 +917,63 @@ class ProgressPlayer:
         self.status_var.set(detail)
 
     def active_process_log_size(self):
+        path = self.active_process_log_path()
+        return path.stat().st_size if path else None
+
+    def active_process_log_path(self):
         runs = Path(__file__).resolve().parent / "progress_player" / "runs"
         candidates = sorted(
             runs.glob(f"*-domain{self.active_domain_id}-*/eskf_process.jsonl"),
             key=lambda path: path.stat().st_mtime_ns, reverse=True)
-        return candidates[0].stat().st_size if candidates else None
+        return candidates[0] if candidates else None
+
+    def start_cache_builder(self):
+        if (self.bag_dir is None or self.cache_fingerprint is None or
+                self.cache_builder is not None):
+            return
+        process_log = self.active_process_log_path()
+        target_yaml = resolve_target_yaml(self.profile, self.bag_dir)
+        if process_log is None or target_yaml is None:
+            return
+        root = Path(__file__).resolve().parent
+        command = [
+            sys.executable, str(root / "progress_player" /
+                                "build_persistent_replay_cache.py"),
+            "--bag", str(self.bag_dir), "--target-yaml", target_yaml,
+            "--build-state", str(root / "progress_player" / "build_state" /
+                                 "eskf_compare.json"),
+            "--process-log", str(process_log),
+            "--cache-root", str(root / "progress_player" / "cache"),
+        ]
+        log_path = root / "tmp" / "rosbag_progress_player_logs" / "cache_builder.log"
+        stream = log_path.open("ab")
+        try:
+            self.cache_builder = subprocess.Popen(
+                command, stdout=stream, stderr=subprocess.STDOUT)
+        finally:
+            stream.close()
+        self.status_var.set("首次结果已封存，正在建立持久化轨迹和过程量时间索引…")
+        self.root.after(1000, self.poll_cache_builder)
+
+    def poll_cache_builder(self):
+        if self.cache_builder is None:
+            return
+        status = self.cache_builder.poll()
+        if status is None:
+            self.root.after(1000, self.poll_cache_builder)
+            return
+        self.cache_builder = None
+        if status != 0 or self.cache_fingerprint is None:
+            self.status_var.set(
+                "持久化缓存建立失败；本次状态仍可用，查看 cache_builder.log")
+            return
+        manifest = load_valid_manifest(
+            Path(__file__).resolve().parent / "progress_player" / "cache",
+            self.cache_fingerprint)
+        if manifest is None:
+            self.status_var.set("持久化缓存校验失败；下次将重新完整计算")
+            return
+        self.status_var.set("持久化缓存已建立；下次打开相同 bag 将进入只读纯回放")
 
     def begin_checkpoint_forward_replay(self, future):
         try:
@@ -915,7 +1010,10 @@ class ProgressPlayer:
             f"状态已从起点重建并暂停；目标后越界 {overshoot_ms:.1f} ms（未回拨状态）")
 
     def start_managed_process(self, env: dict, log_dir: str):
-        command = self.profile.get("managed_command")
+        command = (["bash", str(Path(__file__).resolve().parent /
+                                "progress_player" / "run_cached_replay_stack.sh")]
+                   if self.cache_manifest is not None else
+                   self.profile.get("managed_command"))
         if not command or self.managed_process is not None:
             return
         cwd = self.profile.get("cwd")

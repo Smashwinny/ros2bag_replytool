@@ -106,8 +106,8 @@ bash -n progress_player/launch_eskf_multi_replay.sh
 `progress_player/build_state/`，不提交到 Git。
 
 这里的“复用编译”不等于跨进程恢复 checkpoint：`FullReplayCheckpoint` 当前保存在
-ESKF 进程内存中。关闭整套回放后重新启动，仍需先完整播放才能建立本进程的精确状态；
-工具不会仅凭二进制未变化就把旧内存状态标记为可恢复。
+ESKF 进程内存中。重新启动后若要继续做精确状态恢复或 bit-exact 审计，仍需重新完整
+计算；如果只查看首次结果，则使用下述持久化显示缓存，不把缓存轨迹冒充当前计算状态。
 
 ### 首次结果持久化与纯回放
 

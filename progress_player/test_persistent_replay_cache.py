@@ -7,10 +7,22 @@ import unittest
 
 from persistent_replay_cache import (
     cache_fingerprint, create_database, index_process_log, insert_trajectory,
-    load_valid_manifest, nearest_process_record, write_manifest)
+    load_valid_manifest, nearest_process_record, reset_build_database,
+    write_manifest)
 
 
 class PersistentReplayCacheTest(unittest.TestCase):
+    def test_reset_build_database_removes_sqlite_sidecars(self):
+        with tempfile.TemporaryDirectory(
+                dir=Path(__file__).parents[1] / "tmp") as directory:
+            database = Path(directory) / "index.sqlite3.building"
+            sidecars = [database, Path(f"{database}-wal"),
+                        Path(f"{database}-shm")]
+            for path in sidecars:
+                path.write_bytes(b"stale")
+            reset_build_database(database)
+            self.assertFalse(any(path.exists() for path in sidecars))
+
     def test_manifest_binds_bag_target_build_and_process_log(self):
         with tempfile.TemporaryDirectory(
                 dir=Path(__file__).parents[1] / "tmp") as directory:

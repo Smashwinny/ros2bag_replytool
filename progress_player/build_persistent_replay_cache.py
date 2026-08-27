@@ -11,7 +11,7 @@ import rosbag2_py
 
 from persistent_replay_cache import (
     cache_fingerprint, create_database, index_process_log,
-    insert_trajectory, write_manifest)
+    insert_trajectory, reset_build_database, write_manifest)
 
 
 def legacy_poses(bag_dir: Path):
@@ -44,7 +44,7 @@ def main():
     cache_dir = args.cache_root / fingerprint
     cache_dir.mkdir(parents=True, exist_ok=True)
     temporary = cache_dir / "index.sqlite3.building"
-    temporary.unlink(missing_ok=True)
+    reset_build_database(temporary)
     connection = create_database(temporary)
     try:
         indexed, eskf_poses = index_process_log(connection, args.process_log)

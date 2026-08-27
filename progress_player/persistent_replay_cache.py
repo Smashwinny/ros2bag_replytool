@@ -14,6 +14,12 @@ SCHEMA = "eskf_persistent_display_cache/v1"
 INDEX_SCHEMA = 1
 
 
+def reset_build_database(path: Path) -> None:
+    """Remove an interrupted SQLite build and its journal sidecars."""
+    for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+        candidate.unlink(missing_ok=True)
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:

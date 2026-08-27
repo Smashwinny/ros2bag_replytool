@@ -53,3 +53,15 @@ def ordinal_at_or_after(records: list[BagRecord], timestamp_ns: int) -> int:
 def ordinal_at_or_before(records: list[BagRecord], timestamp_ns: int) -> int:
     timestamps = [record.timestamp_ns for record in records]
     return bisect.bisect_right(timestamps, timestamp_ns) - 1
+
+
+def completed_stop_should_release(stop_after_ordinal: int | None,
+                                  cursor: int) -> bool:
+    """Return whether resume follows a completed bounded replay.
+
+    A bounded replay advances ``cursor`` past its inclusive stop ordinal before
+    pausing.  Keeping that old stop point would make the next resume publish
+    exactly one record and pause again.
+    """
+    return (stop_after_ordinal is not None and
+            cursor > stop_after_ordinal)

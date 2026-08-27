@@ -2,7 +2,8 @@
 import unittest
 
 from ordinal_protocol import (BagRecord, HEADER, ordinal_at_or_after,
-                              ordinal_at_or_before, pack_ingress,
+                              ordinal_at_or_before,
+                              completed_stop_should_release, pack_ingress,
                               unpack_header)
 
 
@@ -28,6 +29,12 @@ class OrdinalProtocolTest(unittest.TestCase):
     def test_non_ingress_topic_is_rejected(self):
         with self.assertRaises(ValueError):
             pack_ingress(0, BagRecord(0, "/tf", 1, b"x"))
+
+    def test_resume_releases_only_a_completed_bounded_replay(self):
+        self.assertTrue(completed_stop_should_release(42, 43))
+        self.assertFalse(completed_stop_should_release(42, 42))
+        self.assertFalse(completed_stop_should_release(42, 10))
+        self.assertFalse(completed_stop_should_release(None, 43))
 
 
 if __name__ == "__main__":

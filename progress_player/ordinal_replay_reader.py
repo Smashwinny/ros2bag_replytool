@@ -20,7 +20,8 @@ from rosidl_runtime_py.utilities import get_message
 from std_msgs.msg import String, UInt8MultiArray
 
 from ordinal_protocol import (BagRecord, TOPIC_IDS, ordinal_at_or_after,
-                              ordinal_at_or_before, pack_ingress)
+                              ordinal_at_or_before,
+                              completed_stop_should_release, pack_ingress)
 
 
 def load_records(bag_dir: Path):
@@ -121,6 +122,9 @@ class OrdinalReplayReader(Node):
 
     def on_resume(self, _request, response):
         with self.condition:
+            if completed_stop_should_release(
+                    self.stop_after_ordinal, self.cursor):
+                self.stop_after_ordinal = None
             self.paused = False
             self.reset_timing_locked()
             self.condition.notify_all()
